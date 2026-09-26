@@ -65,8 +65,10 @@ Root namespace `Platform` (assemblies `Platform.Kernel`, `Platform.Packs.Ticketi
 1. Packs reference `Kernel.Contracts` only. Never the `Kernel` implementation, never another pack.
 2. `Kernel` never references a pack.
 3. `Kernel.Contracts` references nothing in the solution.
-4. Pack domain code does not reference EF Core or ASP.NET Core.
-5. Only the host (`Platform.Api`) references everything; it is the only composition root.
+4. Pack domain code does not reference EF Core or ASP.NET Core. Domain code lives in
+   `Platform.Packs.<Pack>.Domain` (and sub-namespaces); that namespace is what the rule checks.
+5. Only the host (`Platform.Api`) references everything; it is the only composition root. Every pack
+   project is named `Packs.<Name>` and is referenced by the host.
 
 Changing a boundary requires an ADR first.
 
