@@ -20,15 +20,23 @@ cross-organizer marketplace in scope.
 Prerequisites: .NET SDK 10.0.301 (pinned in `global.json`), Docker Desktop.
 
 ```bash
-docker compose up -d                                   # PostgreSQL on host port 5433
-dotnet build Platform.slnx                             # warnings are errors
-dotnet test Platform.slnx                              # integration tests need Docker (Testcontainers)
+docker compose up -d --wait                            # PostgreSQL on host port 5433
+dotnet build Platform.slnx                             # warnings (including code style) are errors
+dotnet test                                            # from the repo root; needs Docker (Testcontainers)
 dotnet format Platform.slnx --verify-no-changes        # CI fails on formatting drift
-dotnet run --project src/Host/Platform.Api             # /health/live and /health/ready
+dotnet run --project src/Host/Platform.Api             # http://localhost:5100/health/live and /health/ready
+docker build -t platform-api .                         # production image (non-root, port 8080)
 ```
 
 - Host port **5433**, not 5432: the dev machine runs a native PostgreSQL on 5432.
-- Local database credentials live in `docker-compose.yml` and are for local development only.
+- Local database credentials live in `docker-compose.yml` and `appsettings.Development.json`. They
+  belong to the throwaway local container only; every other environment supplies
+  `ConnectionStrings__Platform` from environment variables or a secret store.
+- Tests run on **Microsoft.Testing.Platform** (xUnit v3), selected in `global.json`. Use
+  `dotnet test` or `dotnet test --solution Platform.slnx`; the old positional
+  `dotnet test Platform.slnx` form is VSTest-only and fails.
+- Liveness checks no dependencies (a database outage must not trigger restarts); readiness checks
+  PostgreSQL and returns 503 when it is unreachable.
 
 ## 3. Structure
 

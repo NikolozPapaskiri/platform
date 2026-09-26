@@ -1,0 +1,26 @@
+# Local development dependencies. Run: docker compose up -d
+# The API itself runs on the host (dotnet run) so it can be debugged; see AGENTS.md section 2.
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: platform-postgres
+    environment:
+      # LOCAL DEVELOPMENT ONLY. Not real credentials; never reuse outside this container.
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform
+      POSTGRES_DB: platform
+    ports:
+      # Host 5433, not 5432: the dev machine already runs a native PostgreSQL on 5432, which would
+      # silently intercept connections meant for this container.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U platform -d platform"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  pgdata:

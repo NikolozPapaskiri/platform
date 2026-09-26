@@ -1,0 +1,38 @@
+<Project>
+  <!-- Applies to every project under this folder. Per-project csproj files only add what differs. -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Warnings are errors: a warning nobody fixes today is noise that hides tomorrow's real one. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- .NET analyzers at the SDK's recommended default rule set. Raising AnalysisMode later is a
+         deliberate change with its own PR, not a warning flood on day one. -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+
+    <!-- Makes `dotnet build` report the same code-style (IDE*) diagnostics as the editor and
+         `dotnet format`, so CI and local builds cannot disagree. -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Needed for IDE0005 (unnecessary usings) to run during build. CS1591 (missing XML doc on a
+         public member) is off: doc comments are required where they carry a rule, not everywhere. -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+
+    <!-- Fail restore on known-vulnerable packages, including transitive ones. -->
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+  </PropertyGroup>
+
+  <!-- Folder names follow the repository layout (Kernel, Packs.Ticketing, ...); assemblies and root
+       namespaces all live under Platform.* (Platform.Kernel, Platform.Packs.Ticketing, ...). -->
+  <PropertyGroup Condition="!$(MSBuildProjectName.StartsWith('Platform.'))">
+    <RootNamespace>Platform.$(MSBuildProjectName)</RootNamespace>
+    <AssemblyName>Platform.$(MSBuildProjectName)</AssemblyName>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,18 @@
+# Keep the build context small and free of local artifacts and secrets.
+**/bin/
+**/obj/
+**/.vs/
+**/.vscode/
+**/.idea/
+**/*.user
+**/TestResults/
+.git/
+.github/
+.claude/
+docs/
+tests/
+web/
+**/appsettings.*.local.json
+**/.env
+**/secrets.json
+**/appsettings.Development.json
