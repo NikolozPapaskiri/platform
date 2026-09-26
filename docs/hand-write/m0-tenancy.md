@@ -45,7 +45,11 @@ connection or per transaction, is part of the exercise.
 
 ### C. Row-level security migration
 
-For **every tenant-owned table** (today: `outbox_messages`):
+For **every tenant-owned table** (today: `outbox_messages` and `outbox_handler_receipts`):
+
+Note that `outbox_handler_receipts` is created by a migration that runs *after*
+`AddRowLevelSecurity`, so it does not exist yet when your migration runs. Deciding how it gets its
+policy is the same question every new table in M1 will raise; contract 6 fails until it has one.
 
 - Enable row-level security, and make it apply to the table owner too.
 - Reads only return the current tenant's rows. With no tenant set: zero rows, not an error.

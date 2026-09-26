@@ -90,12 +90,34 @@ public sealed class TenancyDatabase : IAsyncLifetime
             insert.Parameters.Add(new NpgsqlParameter { Value = tenant.Value });
             await insert.ExecuteNonQueryAsync();
         }
+
+        // A tenant-owned table for a test-only entity that raises domain events (see WidgetDbContext).
+        // Created by the owner, so the application role gets access through default privileges.
+        await using var widgets = dataSource.CreateCommand(
+            "CREATE TABLE test_widgets (id uuid PRIMARY KEY, tenant_id uuid NOT NULL, name text NOT NULL)");
+        await widgets.ExecuteNonQueryAsync();
+    }
+
+    /// <summary>
+    /// Adds a fresh active tenant to the catalog. Tests that write give themselves their own tenant,
+    /// so their assertions cannot see rows written by other tests.
+    /// </summary>
+    public async Task<TenantId> CreateTenantAsync()
+    {
+        var tenant = TenantId.New();
+        await using var owner = CreateOwnerContext();
+        owner.Tenants.Add(new Tenant(tenant, "t-" + tenant.Value.ToString("N"), TenantStatus.Active, DateTimeOffset.UtcNow));
+        await owner.SaveChangesAsync();
+        return tenant;
     }
 
     public async ValueTask DisposeAsync() => await _container.DisposeAsync();
 
     /// <summary>The application's own service graph (AddKernel), connected as the application role.</summary>
-    public ServiceProvider CreateServices(int? maxPoolSize = null, bool noResetOnClose = false)
+    public ServiceProvider CreateServices(
+        int? maxPoolSize = null,
+        bool noResetOnClose = false,
+        Action<IServiceCollection>? configure = null)
     {
         var connectionString = new NpgsqlConnectionStringBuilder(AppConnectionString);
         if (maxPoolSize is { } size)
@@ -115,10 +137,12 @@ public sealed class TenancyDatabase : IAsyncLifetime
             })
             .Build();
 
-        return new ServiceCollection()
+        var services = new ServiceCollection()
             .AddLogging()
-            .AddKernel(configuration)
-            .BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
+            .AddKernel(configuration);
+        configure?.Invoke(services);
+
+        return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
 
     /// <summary>Owner connection, for setup and inspection only. It is never how the application connects.</summary>
