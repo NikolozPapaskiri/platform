@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
@@ -388,6 +390,44 @@ public sealed class OutboxTests(TenancyDatabase database)
 
         Assert.NotNull(Assert.Single(await OutboxRowsAsync(first)).ProcessedAt);
         Assert.NotNull(Assert.Single(await OutboxRowsAsync(second)).ProcessedAt);
+    }
+
+    [Fact]
+    public async Task Dispatch_JoinsTheTraceOfTheOperationThatRaisedTheEvent()
+    {
+        var tenant = await database.CreateTenantAsync();
+        await using var services = CreateServices();
+        using var requestSource = new ActivitySource("Platform.Tests.Request." + Guid.NewGuid().ToString("N"));
+        var dispatchSpans = new ConcurrentBag<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == requestSource.Name || source.Name == OutboxDiagnostics.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activity =>
+            {
+                if (activity.Source.Name == OutboxDiagnostics.ActivitySourceName &&
+                    Equals(activity.GetTagItem("tenant.id"), tenant.ToString()))
+                {
+                    dispatchSpans.Add(activity);
+                }
+            },
+        };
+        ActivitySource.AddActivityListener(listener);
+
+        ActivityTraceId requestTrace;
+        ActivitySpanId requestSpan;
+        using (var request = requestSource.StartActivity("request raising the event"))
+        {
+            requestTrace = request!.TraceId;
+            requestSpan = request.SpanId;
+            await CreateWidgetAsync(services, tenant);
+        }
+
+        await Processor(services).ProcessTenantAsync(tenant, Ct);
+
+        var dispatch = Assert.Single(dispatchSpans);
+        Assert.Equal(requestTrace, dispatch.TraceId);
+        Assert.Equal(requestSpan, dispatch.ParentSpanId);
     }
 
     [Fact]

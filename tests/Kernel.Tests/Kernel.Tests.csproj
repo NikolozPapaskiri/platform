@@ -10,6 +10,7 @@
     <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <PackageReference Include="Testcontainers.PostgreSql" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
+    <PackageReference Include="OpenTelemetry.Exporter.InMemory" />
     <ProjectReference Include="..\..\src\Kernel\Kernel\Kernel.csproj" />
     <ProjectReference Include="..\..\src\Host\Platform.Api\Platform.Api.csproj" />
   </ItemGroup>

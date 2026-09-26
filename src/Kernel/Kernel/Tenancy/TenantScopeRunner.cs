@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Platform.Kernel.Contracts.Tenancy;
+using Platform.Kernel.Telemetry;
 
 namespace Platform.Kernel.Tenancy;
 
@@ -19,7 +20,7 @@ public sealed class TenantScopeRunner(IServiceScopeFactory scopeFactory)
         ArgumentNullException.ThrowIfNull(work);
 
         await using var scope = scopeFactory.CreateAsyncScope();
-        scope.ServiceProvider.GetRequiredService<TenantContext>().Set(tenantId);
+        Enter(scope.ServiceProvider, tenantId);
         await work(scope.ServiceProvider);
     }
 
@@ -28,7 +29,17 @@ public sealed class TenantScopeRunner(IServiceScopeFactory scopeFactory)
         ArgumentNullException.ThrowIfNull(work);
 
         await using var scope = scopeFactory.CreateAsyncScope();
-        scope.ServiceProvider.GetRequiredService<TenantContext>().Set(tenantId);
+        Enter(scope.ServiceProvider, tenantId);
         return await work(scope.ServiceProvider);
+    }
+
+    private static void Enter(IServiceProvider services, TenantId tenantId)
+    {
+        var tenant = services.GetRequiredService<TenantContext>();
+
+        // Bound in this async method, so telemetry sees this tenant for the work below and the
+        // binding disappears when RunAsTenantAsync returns.
+        TenantTelemetry.Bind(tenant);
+        tenant.Set(tenantId);
     }
 }

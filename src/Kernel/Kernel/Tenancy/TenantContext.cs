@@ -1,4 +1,5 @@
 using Platform.Kernel.Contracts.Tenancy;
+using Platform.Kernel.Telemetry;
 
 namespace Platform.Kernel.Tenancy;
 
@@ -33,5 +34,6 @@ public sealed class TenantContext : ITenantContext
         }
 
         _tenantId = tenantId;
+        TenantTelemetry.OnResolved(this, tenantId);
     }
 }

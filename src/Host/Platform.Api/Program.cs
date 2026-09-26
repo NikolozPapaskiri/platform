@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Platform.Kernel;
 using Platform.Kernel.Contracts.Modules;
+using Platform.Kernel.Telemetry;
 using Platform.Packs.Ticketing;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 // scanning that silently picks up whatever is on disk.
 IModule[] modules = [new TicketingModule()];
 
+builder.AddPlatformTelemetry();
 builder.Services.AddKernel(builder.Configuration);
 foreach (var module in modules)
 {
@@ -16,6 +18,10 @@ foreach (var module in modules)
 }
 
 var app = builder.Build();
+
+// Must stay first: it binds the request's tenant context for telemetry before tenant resolution
+// runs further in, and tags the HTTP metrics with tenant.id on the way out.
+app.UseMiddleware<TenantTelemetryMiddleware>();
 
 // Liveness: the process is up and can serve HTTP. It deliberately checks no dependencies: if the
 // database is down, restarting this process fixes nothing, and a liveness failure would make an

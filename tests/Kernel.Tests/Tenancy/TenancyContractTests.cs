@@ -5,10 +5,13 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Npgsql;
+using OpenTelemetry.Logs;
 using Platform.Kernel.Contracts.Tenancy;
 using Platform.Kernel.Outbox;
 using Platform.Kernel.Persistence;
+using Platform.Kernel.Telemetry;
 using Platform.Kernel.Tenancy;
 using Platform.Kernel.Tests.Support;
 
@@ -64,6 +67,41 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         var (status, _) = await RequestAsync(TenancyDatabase.SuspendedHost);
 
         Assert.Equal(HttpStatusCode.Forbidden, status);
+    }
+
+    [Fact(Skip = "HAND-WRITE: Nika")]
+    public async Task Resolution_TenantAppearsOnTheRequestsLogs()
+    {
+        // ADR 0003: tenant.id on every log once the tenant is resolved. The telemetry middleware runs
+        // first (as in Program.cs); resolution runs after it.
+        var logs = new List<LogRecord>();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Logging.ClearProviders();
+        builder.Logging.AddOpenTelemetry(options =>
+        {
+            options.AddProcessor(new TenantLogProcessor());
+            options.AddInMemoryExporter(logs);
+        });
+        builder.Configuration["ConnectionStrings:Platform"] = database.AppConnectionString;
+        builder.Services.AddKernel(builder.Configuration);
+
+        await using var app = builder.Build();
+        app.UseMiddleware<TenantTelemetryMiddleware>();
+        app.UseMiddleware<TenantResolutionMiddleware>();
+        app.Run(context =>
+        {
+            context.RequestServices.GetRequiredService<ILogger<TenancyContractTests>>().LogInformation("endpoint log");
+            return context.Response.WriteAsync("ok");
+        });
+        await app.StartAsync(Ct);
+        using var client = app.GetTestClient();
+        using var response = await client.GetAsync(new Uri($"http://{TenancyDatabase.TenantAHost}/"), Ct);
+        await app.StopAsync(Ct);
+
+        Assert.Contains(
+            logs.Single(r => r.Body == "endpoint log").Attributes!,
+            attribute => attribute.Key == "tenant.id" && Equals(attribute.Value, database.TenantA.ToString()));
     }
 
     // ---- 3. Row-level security on its own (raw SQL, no EF Core query filter) ----

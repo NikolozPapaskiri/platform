@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,7 +34,14 @@ public static class KernelServiceCollectionExtensions
 
         // One NpgsqlDataSource per application: it owns the connection pool. Registering it as a
         // singleton is what makes pooling work; creating one per request would defeat it.
-        services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+        services.AddSingleton(_ => new NpgsqlDataSourceBuilder(connectionString)
+            // Trace only commands that belong to some operation (a request, an outbox dispatch).
+            // The dispatcher's background polling would otherwise start a new root trace every
+            // poll interval: noise locally, and paid-for volume once exported. Trade-off: the
+            // dispatcher's catalog walk and claim queries are not traced; Npgsql metrics still
+            // show their timing.
+            .ConfigureTracing(tracing => tracing.ConfigureCommandFilter(_ => Activity.Current is not null))
+            .Build());
 
         // One tenant per scope (request or background job). The concrete type is registered so Kernel
         // code can set it; everything else depends on the read-only ITenantContext.

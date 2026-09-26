@@ -26,7 +26,8 @@ For every request that needs a tenant:
 - Known host of a **suspended** tenant: respond **403** and stop.
 - Host names are case-insensitive.
 - Health endpoints (`/health/live`, `/health/ready`) must keep working with no tenant.
-- Then register it in the host's request pipeline (`src/Host/Platform.Api/Program.cs`).
+- Then register it in the host's request pipeline (`src/Host/Platform.Api/Program.cs`), after
+  `TenantTelemetryMiddleware`, which must stay first so `tenant.id` reaches every span and log.
 
 ### B. Tenant session interceptor
 
@@ -68,6 +69,7 @@ fail today for the right reason (missing behaviour, not broken test plumbing).
 | 1. Host match is case-insensitive | `Resolution_HostIsMatchedCaseInsensitively` | A |
 | 1. Unknown host returns 404 | `Resolution_UnknownHost_Returns404` | A |
 | 1. Suspended tenant returns 403 | `Resolution_SuspendedTenant_Returns403` | A |
+| 1. The tenant appears on the request's logs | `Resolution_TenantAppearsOnTheRequestsLogs` | A |
 | 3. Tenant A cannot read B's rows through raw SQL | `RawSql_AsTenantA_SeesOnlyTenantARows` | B + C |
 | 4. Inserting another tenant's row is rejected by the database | `RawSql_InsertingARowForAnotherTenant_IsRejectedByTheDatabase` | B + C |
 | 4. Moving a row to another tenant is rejected by the database | `RawSql_MovingARowToAnotherTenant_IsRejectedByTheDatabase` | B + C |
