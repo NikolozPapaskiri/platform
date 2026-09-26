@@ -1,8 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
+using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
+using Platform.Kernel.Outbox;
 using Platform.Kernel.Persistence;
 using Platform.Kernel.Tenancy;
 
@@ -42,6 +45,18 @@ public static class KernelServiceCollectionExtensions
         // captured. The hand-written TenantSessionInterceptor is registered here once implemented.
         services.AddDbContext<PlatformDbContext>((sp, options) =>
             options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
+
+        // Outbox: events are staged by TenantAwareDbContext.SaveChanges and dispatched in-process.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddMetrics();
+        services.AddOptions<OutboxOptions>().Bind(configuration.GetSection(OutboxOptions.SectionName));
+        services.AddSingleton(sp => new DomainEventRegistry(
+            sp.GetServices<DomainEventRegistration>(),
+            sp.GetServices<DomainEventHandlerRegistration>()));
+        services.AddSingleton<OutboxMessageFactory>();
+        services.AddSingleton<OutboxMetrics>();
+        services.AddSingleton<OutboxProcessor>();
+        services.AddHostedService<OutboxDispatcher>();
 
         services.AddHealthChecks()
             .AddCheck<PostgresHealthCheck>("postgres", tags: [HealthTags.Ready], timeout: TimeSpan.FromSeconds(5));

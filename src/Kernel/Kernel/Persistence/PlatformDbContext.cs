@@ -5,7 +5,7 @@ using Platform.Kernel.Tenancy.Catalog;
 
 namespace Platform.Kernel.Persistence;
 
-/// <summary>The kernel's own data: the tenant catalog and the outbox.</summary>
+/// <summary>The kernel's own data: the tenant catalog and the outbox (mapped by the base class).</summary>
 public sealed class PlatformDbContext(DbContextOptions<PlatformDbContext> options, ITenantContext tenantContext)
     : TenantAwareDbContext(options, tenantContext)
 {
@@ -14,6 +14,11 @@ public sealed class PlatformDbContext(DbContextOptions<PlatformDbContext> option
     public DbSet<TenantDomain> TenantDomains => Set<TenantDomain>();
 
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+
+    public DbSet<OutboxHandlerReceipt> OutboxHandlerReceipts => Set<OutboxHandlerReceipt>();
+
+    /// <summary>The Kernel's migrations create the outbox tables; pack contexts only map them.</summary>
+    protected override bool OwnsOutboxSchema => true;
 
     protected override void ConfigureModel(ModelBuilder modelBuilder)
     {
@@ -32,14 +37,6 @@ public sealed class PlatformDbContext(DbContextOptions<PlatformDbContext> option
             domain.Property(d => d.Host).HasMaxLength(253); // longest valid DNS name
             domain.HasOne<Tenant>().WithMany().HasForeignKey(d => d.TenantId).OnDelete(DeleteBehavior.Restrict);
             domain.HasIndex(d => d.TenantId);
-        });
-
-        modelBuilder.Entity<OutboxMessage>(message =>
-        {
-            message.HasKey(m => m.Id);
-            message.Property(m => m.Id).ValueGeneratedNever();
-            message.Property(m => m.Type).HasMaxLength(200);
-            message.Property(m => m.Payload).HasColumnType("jsonb");
         });
     }
 }

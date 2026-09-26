@@ -46,7 +46,7 @@ Changing any of these needs a new ADR, proposed and approved before the code cha
 3. CI: build, format, unit, integration, and architecture tests; vulnerable-package and secret scanning.
 4. Architecture tests for the boundary and tenancy rules.
 5. Tenancy scaffolding plus the hand-write contract (stubs, skipped contract tests, `docs/hand-write/m0-tenancy.md`).
-6. Transactional outbox and OpenTelemetry.
+6. Transactional outbox (6a) and OpenTelemetry (6b), split into two PRs so each is reviewable in one sitting.
 7. Payments contract (`IPaymentGateway`, `Money`), with a fake gateway in tests only.
 
 **M0 is done when** all seven are merged with CI green on `main`, the skipped `HAND-WRITE` tests are

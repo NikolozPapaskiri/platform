@@ -106,6 +106,24 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
 - Never hardcode a tenant id or branch on a specific tenant anywhere.
 - `tenant.id` is on every log scope, span, and metric once resolved.
 
+### Domain events and the outbox
+
+- An entity that raises events implements `IHasDomainEvents`. `SaveChanges` on any
+  `TenantAwareDbContext` turns its events into `outbox_messages` rows in the **same** transaction.
+  Never publish an event any other way (no direct handler calls, no "save then publish").
+- Declare every event with `services.AddDomainEvent<TEvent>("pack.event-name")` in the pack's
+  `IModule.Register`. The name is stored with each message: **never rename it** once used.
+  Saving an undeclared event fails.
+- Handlers implement `IDomainEventHandler<TEvent>` and are added with `AddDomainEventHandler`.
+  Delivery is at least once. Receipts stop a succeeded handler from running again, but only the
+  Kernel's `PlatformDbContext` work commits atomically with the receipt today. **Treat every handler
+  effect as possibly repeated and key it on `context.MessageId`** until the M1 ADR decides how pack
+  contexts share that transaction.
+- **Open M1 decision (ADR required before M1 code):** packs cannot reference the Kernel, so they
+  cannot derive from `TenantAwareDbContext`. Options include packs contributing entity configuration
+  to one Kernel-owned context, or a persistence abstractions assembly packs may reference.
+- Events are records of ids and values (JSON), never entities.
+
 ## 6. Hand-write boundary (critical)
 
 Nika writes these parts himself, for learning. **Do not implement them**: not as an example, not in
@@ -113,7 +131,7 @@ comments, not in chat, not in a PR, unless Nika explicitly asks for a hint.
 
 | Milestone | Nika hand-writes |
 |---|---|
-| M0 | `TenantResolutionMiddleware`, `TenantSessionInterceptor`, the RLS policy SQL in the `AddRowLevelSecurity` migration |
+| M0 | `TenantResolutionMiddleware`, `TenantSessionInterceptor`, the RLS policy SQL for every tenant-owned table (the `AddRowLevelSecurity` migration and any follow-up policy migration) |
 | M1 | Hold concurrency, the payment state machine |
 | M2 | Offline check-in sync, duplicate-scan conflicts |
 | M3 | Rate limiting under load |

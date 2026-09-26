@@ -1,8 +1,11 @@
 using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.ChangeTracking;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
+using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
+using Platform.Kernel.Outbox;
 
 namespace Platform.Kernel.Persistence;
 
@@ -39,11 +42,19 @@ public abstract class TenantAwareDbContext(DbContextOptions options, ITenantCont
     /// </summary>
     protected TenantId CurrentTenantId => tenantContext.IsResolved ? tenantContext.TenantId : default;
 
-    /// <summary>Configure entities here. The tenant filters are applied after this runs.</summary>
+    /// <summary>
+    /// True for the one context that owns the outbox tables' schema (creates them in its migrations).
+    /// Every other tenant-aware context maps the same tables, so its entities' events land in the same
+    /// transaction as their changes, but excludes them from its own migrations.
+    /// </summary>
+    protected virtual bool OwnsOutboxSchema => false;
+
+    /// <summary>Configure entities here. The outbox is mapped before, and tenant filters after, this runs.</summary>
     protected abstract void ConfigureModel(ModelBuilder modelBuilder);
 
     protected sealed override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        ConfigureOutbox(modelBuilder);
         ConfigureModel(modelBuilder);
         ApplyTenantIsolation(modelBuilder);
     }
@@ -62,14 +73,84 @@ public abstract class TenantAwareDbContext(DbContextOptions options, ITenantCont
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        StageDomainEvents();
         EnforceTenantOnWrites();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        StageDomainEvents();
         EnforceTenantOnWrites();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void ConfigureOutbox(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<OutboxMessage>(message =>
+        {
+            message.ToTable("outbox_messages", table =>
+            {
+                if (!OwnsOutboxSchema)
+                {
+                    table.ExcludeFromMigrations();
+                }
+            });
+            message.HasKey(m => m.Id);
+            message.Property(m => m.Id).ValueGeneratedNever();
+            message.Property(m => m.Type).HasMaxLength(200);
+            message.Property(m => m.Payload).HasColumnType("jsonb");
+            message.Property(m => m.TraceParent).HasMaxLength(55); // W3C traceparent is exactly 55 chars
+            message.Property(m => m.LastError).HasMaxLength(2000);
+
+            // The dispatcher's claim query: this tenant's pending messages, oldest first. Partial, so
+            // processed and parked messages (almost all of them, over time) do not bloat it.
+            message.HasIndex(m => new { m.TenantId, m.OccurredAt })
+                .HasFilter("processed_at IS NULL AND failed_at IS NULL")
+                .HasDatabaseName("ix_outbox_messages_pending");
+        });
+
+        modelBuilder.Entity<OutboxHandlerReceipt>(receipt =>
+        {
+            receipt.ToTable("outbox_handler_receipts", table =>
+            {
+                if (!OwnsOutboxSchema)
+                {
+                    table.ExcludeFromMigrations();
+                }
+            });
+            receipt.HasKey(r => new { r.MessageId, r.Handler });
+            receipt.Property(r => r.Handler).HasMaxLength(300);
+            receipt.HasOne<OutboxMessage>().WithMany().HasForeignKey(r => r.MessageId).OnDelete(DeleteBehavior.Cascade);
+        });
+    }
+
+    /// <summary>
+    /// Moves the events recorded by changed entities into outbox rows tracked by this context, so the
+    /// same SaveChanges (and transaction) writes both. Events are cleared from the entities as they are
+    /// staged: if the save fails and is retried on this context, the staged rows are saved once.
+    /// </summary>
+    private void StageDomainEvents()
+    {
+        var sources = ChangeTracker.Entries<IHasDomainEvents>()
+            .Select(entry => entry.Entity)
+            .Where(entity => entity.DomainEvents.Count > 0)
+            .ToList();
+        if (sources.Count == 0)
+        {
+            return;
+        }
+
+        var factory = this.GetService<OutboxMessageFactory>();
+        foreach (var source in sources)
+        {
+            foreach (var domainEvent in source.DomainEvents)
+            {
+                Set<OutboxMessage>().Add(factory.Create(domainEvent));
+            }
+
+            source.ClearDomainEvents();
+        }
     }
 
     private void ApplyTenantIsolation(ModelBuilder modelBuilder)
