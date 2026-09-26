@@ -130,6 +130,18 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
   to one Kernel-owned context, or a persistence abstractions assembly packs may reference.
 - Events are records of ids and values (JSON), never entities.
 
+### Money and payments (ADR 0004)
+
+- Money is `Money`: integer minor units plus an ISO 4217 code. Never `double`/`float` for money,
+  and never combine currencies.
+- Payments go through `IPaymentGateway` and each organizer's own merchant account. **Fulfil
+  (issue tickets) only after `GetStatusAsync` reports `Succeeded` with the expected amount.** Never
+  on the buyer's return URL, never on a webhook's contents: a webhook only triggers a status check.
+- `PaymentId` and `RefundId` are idempotency keys; `PaymentProviderUnavailableException` means
+  "unknown", never "not paid".
+- Every real adapter derives from `tests/Kernel.Tests/Payments/PaymentGatewayContractTests` and must
+  pass it against the provider's sandbox. `FakePaymentGateway` is for tests only.
+
 ## 6. Hand-write boundary (critical)
 
 Nika writes these parts himself, for learning. **Do not implement them**: not as an example, not in
