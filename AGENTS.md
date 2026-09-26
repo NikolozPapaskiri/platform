@@ -48,6 +48,12 @@ docker build -t platform-api .                         # production image (non-r
   `dotnet test Platform.slnx` form is VSTest-only and fails.
 - Liveness checks no dependencies (a database outage must not trigger restarts); readiness checks
   PostgreSQL and returns 503 when it is unreachable.
+- **Telemetry** (OpenTelemetry traces, metrics, logs). Once a tenant is resolved, `tenant.id` is on
+  every span, every log record, the HTTP server metrics, and the outbox metrics (not on HttpClient
+  or Npgsql metrics). `TenantTelemetryMiddleware` must stay first in the pipeline. Development
+  prints traces and metrics to the console (`Telemetry:ConsoleExporter`). To use a UI instead, run
+  an OTLP backend such as the standalone Aspire dashboard and set `OTEL_EXPORTER_OTLP_ENDPOINT`.
+  New ActivitySources and Meters must be added in `TelemetryHostApplicationBuilderExtensions`.
 - CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: restore, vulnerable-package
   scan, Release build, format check, architecture, unit, and integration tests, plus gitleaks over
   the full history. A red CI blocks merge; never skip a step to get green.
@@ -104,7 +110,7 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
 - `IgnoreQueryFilters()` is allowed only inside Kernel tenancy code, and always with a comment
   explaining why.
 - Never hardcode a tenant id or branch on a specific tenant anywhere.
-- `tenant.id` is on every log scope, span, and metric once resolved.
+- `tenant.id` is on every span and log record, and on the HTTP server and outbox metrics, once resolved.
 
 ### Domain events and the outbox
 
