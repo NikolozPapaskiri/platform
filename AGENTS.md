@@ -37,6 +37,9 @@ docker build -t platform-api .                         # production image (non-r
   `dotnet test Platform.slnx` form is VSTest-only and fails.
 - Liveness checks no dependencies (a database outage must not trigger restarts); readiness checks
   PostgreSQL and returns 503 when it is unreachable.
+- CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: restore, vulnerable-package
+  scan, Release build, format check, architecture, unit, and integration tests, plus gitleaks over
+  the full history. A red CI blocks merge; never skip a step to get green.
 
 ## 3. Structure
 
@@ -62,8 +65,10 @@ Root namespace `Platform` (assemblies `Platform.Kernel`, `Platform.Packs.Ticketi
 1. Packs reference `Kernel.Contracts` only. Never the `Kernel` implementation, never another pack.
 2. `Kernel` never references a pack.
 3. `Kernel.Contracts` references nothing in the solution.
-4. Pack domain code does not reference EF Core or ASP.NET Core.
-5. Only the host (`Platform.Api`) references everything; it is the only composition root.
+4. Pack domain code does not reference EF Core or ASP.NET Core. Domain code lives in
+   `Platform.Packs.<Pack>.Domain` (and sub-namespaces); that namespace is what the rule checks.
+5. Only the host (`Platform.Api`) references everything; it is the only composition root. Every pack
+   project is named `Packs.<Name>` and is referenced by the host.
 
 Changing a boundary requires an ADR first.
 
