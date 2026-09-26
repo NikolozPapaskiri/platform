@@ -1,0 +1,84 @@
+# Runs on every pull request and on every push to main. Two parallel jobs: the .NET gates, and
+# secret scanning. Everything a reviewer relies on is enforced here, not by convention.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same PR cancels the run it supersedes; main always runs to completion.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  dotnet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v6
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('Directory.Packages.props', '**/*.csproj', 'global.json') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # NuGet audit runs during restore and, with warnings as errors, already fails on a known
+      # vulnerability. The explicit scan below makes the policy visible and covers the full graph.
+      - name: Restore
+        run: dotnet restore Platform.slnx
+
+      - name: Vulnerable package scan
+        run: |
+          report=$(dotnet list Platform.slnx package --vulnerable --include-transitive 2>&1)
+          echo "$report"
+          if echo "$report" | grep -q "has the following vulnerable packages"; then
+            echo "::error::Vulnerable NuGet packages detected"
+            exit 1
+          fi
+
+      - name: Build (warnings are errors)
+        run: dotnet build Platform.slnx --no-restore -c Release
+
+      - name: Format
+        run: dotnet format Platform.slnx --verify-no-changes --no-restore
+
+      - name: Architecture tests
+        run: dotnet test --project tests/Architecture.Tests --no-build -c Release
+
+      - name: Unit tests
+        run: dotnet test --project tests/Ticketing.Tests --no-build -c Release
+
+      # Kernel.Tests starts real PostgreSQL containers through Testcontainers; the ubuntu runner
+      # provides Docker.
+      - name: Integration tests
+        run: dotnet test --project tests/Kernel.Tests --no-build -c Release
+
+  secrets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # scan the full history, not just the tip
+
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No GITLEAKS_LICENSE: not required for repositories owned by a personal account.
+          # Comments on PRs would need write access; the failed check is the signal.
+          GITLEAKS_ENABLE_COMMENTS: false

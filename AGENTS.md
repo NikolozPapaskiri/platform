@@ -37,6 +37,9 @@ docker build -t platform-api .                         # production image (non-r
   `dotnet test Platform.slnx` form is VSTest-only and fails.
 - Liveness checks no dependencies (a database outage must not trigger restarts); readiness checks
   PostgreSQL and returns 503 when it is unreachable.
+- CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`: restore, vulnerable-package
+  scan, Release build, format check, architecture, unit, and integration tests, plus gitleaks over
+  the full history. A red CI blocks merge; never skip a step to get green.
 
 ## 3. Structure
 
