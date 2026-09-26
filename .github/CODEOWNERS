@@ -1,0 +1,19 @@
+# Every path is owned by Nika. Kernel, infrastructure, and CI are meant to also need the second
+# reviewer.
+#
+# TODO(reviewer-handle): the second reviewer's GitHub handle is not confirmed yet. When it is, add it
+# to the three protected paths below, e.g. `/src/Kernel/ @NikolozPapaskiri @their-handle`.
+#
+# How GitHub applies this file (so nobody assumes more than it does):
+# - The LAST matching pattern wins, so the protected paths must repeat every owner they want.
+# - When a rule lists several owners, approval from ANY ONE of them satisfies it. CODEOWNERS alone
+#   cannot require both people; that needs branch protection ("Require review from Code Owners"
+#   plus a required-approvals count), set up with CI.
+# - An author cannot approve their own PR. PRs opened under Nika's account therefore need the second
+#   reviewer's approval once code-owner review is enforced.
+
+*               @NikolozPapaskiri
+
+/src/Kernel/    @NikolozPapaskiri
+/infra/         @NikolozPapaskiri
+/.github/       @NikolozPapaskiri
