@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- A pack sees Kernel.Contracts only: never the Kernel implementation, never another pack. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Kernel\Kernel.Contracts\Kernel.Contracts.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- The composition root: the only project allowed to reference the Kernel implementation and
+       every pack together. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Kernel\Kernel\Kernel.csproj" />
+    <ProjectReference Include="..\..\Packs\Ticketing\Packs.Ticketing.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Local-development settings (throwaway container credentials) never ship in a published build
+         or container image. -->
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+</Project>
