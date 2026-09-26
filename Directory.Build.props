@@ -8,6 +8,9 @@
 
     <!-- Warnings are errors: a warning nobody fixes today is noise that hides tomorrow's real one. -->
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- The compiler setting above does not cover MSBuild warnings such as package version
+         conflicts (MSB3277); this one does. -->
+    <MSBuildTreatWarningsAsErrors>true</MSBuildTreatWarningsAsErrors>
 
     <!-- .NET analyzers at the SDK's recommended default rule set. Raising AnalysisMode later is a
          deliberate change with its own PR, not a warning flood on day one. -->
