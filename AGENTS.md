@@ -20,7 +20,10 @@ cross-organizer marketplace in scope.
 Prerequisites: .NET SDK 10.0.301 (pinned in `global.json`), Docker Desktop.
 
 ```bash
+dotnet tool restore                                    # local tools (dotnet-ef), pinned in dotnet-tools.json
 docker compose up -d --wait                            # PostgreSQL on host port 5433
+dotnet ef database update --project src/Kernel/Kernel \
+  --connection "Host=localhost;Port=5433;Database=platform;Username=platform_owner;Password=platform_owner"
 dotnet build Platform.slnx                             # warnings (including code style) are errors
 dotnet test                                            # from the repo root; needs Docker (Testcontainers)
 dotnet format Platform.slnx --verify-no-changes        # CI fails on formatting drift
@@ -29,9 +32,17 @@ docker build -t platform-api .                         # production image (non-r
 ```
 
 - Host port **5433**, not 5432: the dev machine runs a native PostgreSQL on 5432.
-- Local database credentials live in `docker-compose.yml` and `appsettings.Development.json`. They
-  belong to the throwaway local container only; every other environment supplies
-  `ConnectionStrings__Platform` from environment variables or a secret store.
+- **Two database roles** (ADR 0003): `platform_owner` owns the schema and is the only role that runs
+  migrations (always with an explicit `--connection`); `platform_app` is what the application connects
+  as. `docker/postgres/init/` creates `platform_app` when the volume is first created, so after
+  changing that script run `docker compose down -v` (this deletes local data).
+  **The role name `platform_app` is a deployment contract:** migrations grant and revoke on it by
+  name, so every environment (including Azure in M1) must create a role with exactly that name.
+- New migration: `dotnet ef migrations add <Name> --project src/Kernel/Kernel --output-dir Persistence/Migrations`.
+  Read the generated SQL (`dotnet ef migrations script --project src/Kernel/Kernel`) before committing.
+- Local database credentials live in `docker-compose.yml`, `docker/postgres/init/`, and
+  `appsettings.Development.json`. They belong to the throwaway local container only; every other
+  environment supplies `ConnectionStrings__Platform` from environment variables or a secret store.
 - Tests run on **Microsoft.Testing.Platform** (xUnit v3), selected in `global.json`. Use
   `dotnet test` or `dotnet test --solution Platform.slnx`; the old positional
   `dotnet test Platform.slnx` form is VSTest-only and fails.
@@ -54,6 +65,7 @@ tests/Kernel.Tests/            unit + integration (Testcontainers PostgreSQL)
 tests/<Pack>.Tests/
 docs/adr/                      architecture decision records
 docs/hand-write/               learning guides for the parts Nika writes himself
+docker/postgres/init/          local and test database roles (platform_app)
 web/                           reserved for M1; no frontend exists in M0
 infra/                         reserved for M1 (Azure infrastructure as code)
 ```
@@ -77,13 +89,17 @@ Changing a boundary requires an ADR first.
 Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
 
 - Shared database, shared schema. Every tenant-owned table has `TenantId` and implements `ITenantOwned`.
+  Its DbContext derives from `TenantAwareDbContext`, which adds the tenant query filter, stamps
+  `TenantId` on insert, and rejects writes without a tenant or with another tenant's id. An entity
+  that has a `TenantId` but is platform catalog data must be marked `[TenantCatalog]`
+  (architecture tests enforce both).
 - **Two isolation layers, both mandatory:** EF Core global query filters AND PostgreSQL row-level
   security. Neither is optional because the other exists.
 - The tenant is resolved from the **request host** through the tenant catalog (`Tenants`,
   `TenantDomains`). Never from a header, query string, or request body.
 - Code with no resolved tenant (background work) sees **zero** tenant-owned rows. Background work that
-  needs tenant data runs **explicitly as a named tenant**, one tenant at a time (the outbox dispatcher
-  walks the tenant catalog).
+  needs tenant data runs **explicitly as a named tenant** through `TenantScopeRunner.RunAsTenantAsync`,
+  one tenant at a time (the outbox dispatcher walks the tenant catalog).
 - The application database role is not a table owner, not a superuser, and has no `BYPASSRLS`.
 - `IgnoreQueryFilters()` is allowed only inside Kernel tenancy code, and always with a comment
   explaining why.

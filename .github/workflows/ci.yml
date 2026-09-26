@@ -57,6 +57,12 @@ jobs:
       - name: Format
         run: dotnet format Platform.slnx --verify-no-changes --no-restore
 
+      # A model change without its migration would only surface when someone applies migrations.
+      - name: EF model matches migrations
+        run: |
+          dotnet tool restore
+          dotnet ef migrations has-pending-model-changes --project src/Kernel/Kernel --configuration Release --no-build
+
       - name: Architecture tests
         run: dotnet test --project tests/Architecture.Tests --no-build -c Release
 
