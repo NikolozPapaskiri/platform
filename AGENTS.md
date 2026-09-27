@@ -98,7 +98,9 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
   Its DbContext derives from `TenantAwareDbContext`, which adds the tenant query filter, stamps
   `TenantId` on insert, and rejects writes without a tenant or with another tenant's id. An entity
   that has a `TenantId` but is platform catalog data must be marked `[TenantCatalog]`. There is no
-  plain `DbContext` anywhere in the Kernel, the host, or a pack (architecture tests enforce all three).
+  plain `DbContext` anywhere in the Kernel, the host, or a pack. Architecture tests enforce the
+  query filter on every `ITenantOwned` entity, the `[TenantCatalog]` marking, and the no-plain-context
+  rule.
 - **Two isolation layers, both mandatory:** EF Core global query filters AND PostgreSQL row-level
   security. Neither is optional because the other exists.
 - The tenant is resolved from the **request host** through the tenant catalog (`Tenants`,
@@ -186,8 +188,8 @@ code only if he explicitly asks for code.
 
 - Commit secrets, or connection strings containing real credentials.
 - Skip or disable tests to make CI pass. `Skip = "HAND-WRITE: Nika"` is the only allowed skip;
-  any other skip reason, `SkipUnless`/`SkipWhen`, `Explicit = true`, or `Assert.Skip` fails the
-  architecture tests.
+  any other skip reason, `SkipUnless`/`SkipWhen`/`SkipExceptions`, `Explicit = true`, `Assert.Skip`,
+  `SkipException`, or a dynamic-skip message fails the architecture tests.
 - Use `IgnoreQueryFilters()` outside Kernel tenancy code, or without a comment explaining why.
 - Hardcode tenant ids or branch on a specific tenant.
 - Add features beyond the current milestone.

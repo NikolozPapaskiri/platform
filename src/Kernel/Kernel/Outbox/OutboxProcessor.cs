@@ -48,18 +48,26 @@ public sealed partial class OutboxProcessor(
         var dispatched = 0;
         foreach (var tenant in await ActiveTenantsAsync(cancellationToken))
         {
-            try
-            {
-                dispatched += await ProcessTenantAsync(tenant, cancellationToken);
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                // One tenant's failure (say, a bad row) must not stop every other tenant's dispatch.
-                LogTenantFailed(ex, tenant.Value);
-            }
+            dispatched += await ProcessTenantIsolatedAsync(tenant, cancellationToken);
         }
 
         return dispatched;
+    }
+
+    private async Task<int> ProcessTenantIsolatedAsync(TenantId tenant, CancellationToken cancellationToken)
+    {
+        // Bound here as well, so the failure log below carries tenant.id too.
+        TenantTelemetry.BindKnownTenant(tenant);
+        try
+        {
+            return await ProcessTenantAsync(tenant, cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // One tenant's failure (say, a bad row) must not stop every other tenant's dispatch.
+            LogTenantFailed(ex, tenant.Value);
+            return 0;
+        }
     }
 
     /// <summary>Claims and processes up to <see cref="OutboxOptions.BatchSize"/> of the tenant's due messages.</summary>
@@ -139,12 +147,13 @@ public sealed partial class OutboxProcessor(
 
         using var activity = OutboxDiagnostics.StartProcessing(message);
 
-        var domainEvent = registry.TryDeserialize(message.Type, message.Payload);
+        var domainEvent = registry.TryDeserialize(message.Type, message.Payload, out var unreadable);
         if (domainEvent is null)
         {
-            // Retrying cannot fix an unknown type or an unreadable payload: park it for an operator.
-            LogUnreadable(message.Id, message.Type);
-            if (await ParkAsync(tenant, messageId, leaseToken, "Unknown event type or unreadable payload.", cancellationToken))
+            // Retrying cannot fix an unknown type or an unreadable payload: park it for an operator,
+            // with the reason, so the operator can tell a bad payload from a deployment bug.
+            LogUnreadable(message.Id, message.Type, unreadable);
+            if (await ParkAsync(tenant, messageId, leaseToken, Truncate(unreadable ?? "Unreadable."), cancellationToken))
             {
                 metrics.Parked(message.Type, tenant);
             }
@@ -192,9 +201,7 @@ public sealed partial class OutboxProcessor(
         var db = services.GetRequiredService<PlatformDbContext>();
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
 
-        var alreadyDone = await db.OutboxHandlerReceipts
-            .AnyAsync(r => r.MessageId == context.MessageId && r.Handler == handler.Name, cancellationToken);
-        if (alreadyDone)
+        if (await ReceiptExistsAsync(db, handler, context, cancellationToken))
         {
             return;
         }
@@ -206,21 +213,32 @@ public sealed partial class OutboxProcessor(
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException ex) when (IsReceiptConflict(db, ex))
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
         {
-            // Another dispatcher (one whose lease expired while it worked) finished this handler first.
-            // Its work is committed; this transaction's copy is rolled back on dispose. Done, not failed.
-            // Only the receipt's own key counts: any other unique violation is the handler's work
-            // failing, and must fail the attempt like any other exception.
-            return;
+            // Either another dispatcher (one whose lease expired while this one worked) finished this
+            // handler first, or the handler's own work broke a unique constraint. The constraint name
+            // cannot tell them apart: PostgreSQL reports whichever insert failed first, and a
+            // concurrent run of an idempotent handler collides on its own table as well as on the
+            // receipt. So decide on the receipt itself. Committed by the other dispatcher: done, not
+            // failed (its copy of the work is the one that counts). Absent: a real failure.
+            await transaction.RollbackAsync(cancellationToken);
+            if (await ReceiptExistsAsync(db, handler, context, cancellationToken))
+            {
+                return;
+            }
+
+            throw;
         }
 
         await transaction.CommitAsync(cancellationToken);
     }
 
-    private static bool IsReceiptConflict(DbContext db, DbUpdateException exception) =>
-        exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } violation &&
-        violation.ConstraintName == db.Model.FindEntityType(typeof(OutboxHandlerReceipt))?.FindPrimaryKey()?.GetName();
+    private static Task<bool> ReceiptExistsAsync(
+        PlatformDbContext db,
+        RegisteredHandler handler,
+        DomainEventContext context,
+        CancellationToken cancellationToken) =>
+        db.OutboxHandlerReceipts.AnyAsync(r => r.MessageId == context.MessageId && r.Handler == handler.Name, cancellationToken);
 
     private async Task RecordFailureAsync(
         TenantId tenant,
@@ -323,8 +341,8 @@ public sealed partial class OutboxProcessor(
     [LoggerMessage(Level = LogLevel.Error, Message = "Outbox dispatch for tenant {TenantId} failed; continuing with the other tenants.")]
     private partial void LogTenantFailed(Exception exception, Guid tenantId);
 
-    [LoggerMessage(Level = LogLevel.Error, Message = "Outbox message {MessageId} of type {EventType} cannot be read; parking it.")]
-    private partial void LogUnreadable(Guid messageId, string eventType);
+    [LoggerMessage(Level = LogLevel.Error, Message = "Outbox message {MessageId} of type {EventType} cannot be read ({Reason}); parking it.")]
+    private partial void LogUnreadable(Guid messageId, string eventType, string? reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Outbox message {MessageId} of type {EventType} failed on attempt {Attempt}; will retry.")]
     private partial void LogRetry(Exception exception, Guid messageId, string eventType, int attempt);

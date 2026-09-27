@@ -23,7 +23,10 @@ public static class TenantTelemetry
 
     private static readonly AsyncLocal<ITenantContext?> _context = new();
 
-    /// <summary>The tenant of the work running on this logical call path, if resolved.</summary>
+    /// <summary>
+    /// The tenant of the work running on this logical call path, if resolved. For telemetry only:
+    /// never use it for access decisions, which go through the scope's <see cref="ITenantContext"/>.
+    /// </summary>
     public static TenantId? Current => _context.Value is { IsResolved: true } context ? context.TenantId : null;
 
     /// <summary>Binds the unit of work's tenant context to this call path, before the tenant is known.</summary>

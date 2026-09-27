@@ -239,6 +239,7 @@ public sealed class OutboxTests(TenancyDatabase database)
         var parked = Assert.Single(await OutboxRowsAsync(tenant));
         Assert.NotNull(parked.FailedAt);
         Assert.Equal(1, parked.AttemptCount);
+        Assert.Contains("Unknown event type", parked.LastError, StringComparison.Ordinal);
         Assert.Empty(_log.Calls);
     }
 

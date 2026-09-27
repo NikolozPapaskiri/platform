@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Platform.Architecture.Tests.Support;
 
@@ -40,6 +39,11 @@ public sealed partial class TestRuleTests
     [InlineData("[Fact(SkipUnless = nameof(Enabled))]")]
     [InlineData("Assert.Skip(\"later\");")]
     [InlineData("Assert.SkipWhen(true, \"later\");")]
+    [InlineData("[Fact(SkipExceptions = [typeof(NotImplementedException)])]")]
+    [InlineData("[Fact(Skip = \"HAND-WRITE: Nika\" + Later)]")]
+    [InlineData("throw new InvalidOperationException(DynamicSkipToken.Value + \"later\");")]
+    [InlineData("throw new InvalidOperationException(\"$XunitDynamicSkip$later\");")]
+    [InlineData("throw SkipException.ForSkip(\"later\");")]
     public void TheRuleCatches(string line)
     {
         // Guards the patterns themselves: a regex that matches nothing would pass every file.
@@ -60,23 +64,23 @@ public sealed partial class TestRuleTests
     {
         var separator = Path.DirectorySeparatorChar;
 
-        // This file is left out: its samples in TheRuleCatches are violations on purpose.
-        var thisFile = Path.GetFullPath(ThisFile());
+        // This file is left out (its samples in TheRuleCatches are violations on purpose). Matched by
+        // its path in the repository, not [CallerFilePath], which deterministic builds rewrite.
+        var thisFile = Path.Combine(Solution.Root.FullName, "tests", "Architecture.Tests", "TestRuleTests.cs");
         return Directory.GetFiles(Path.Combine(Solution.Root.FullName, "tests"), "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{separator}bin{separator}", StringComparison.Ordinal) &&
                            !path.Contains($"{separator}obj{separator}", StringComparison.Ordinal) &&
-                           !string.Equals(Path.GetFullPath(path), thisFile, StringComparison.OrdinalIgnoreCase));
+                           !string.Equals(path, thisFile, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static string ThisFile([CallerFilePath] string path = "") => path;
-
-    // The reason group captures a string literal when there is one; anything else (a constant, an
-    // expression) captures nothing and so never equals the allowed reason.
-    [GeneratedRegex("""\bSkip\s*=\s*(?<reason>"[^"]*")?""")]
+    // The reason group captures a string literal that ends the argument; anything else (a constant,
+    // an expression, a concatenation) captures nothing and so never equals the allowed reason.
+    [GeneratedRegex("""\bSkip\s*=\s*(?<reason>"[^"]*"(?=\s*[,)]))?""")]
     private static partial Regex SkipProperty();
 
-    // xUnit v3's other ways to keep a test from running: conditional skips, explicit-only tests, and
-    // skipping from inside the test body.
-    [GeneratedRegex("""\b(SkipUnless|SkipWhen)\s*=|\bExplicit\s*=\s*true\b|\bAssert\.Skip(Unless|When)?\s*\(""")]
+    // xUnit v3's other ways to keep a test from running: conditional skips, skips on exception types,
+    // explicit-only tests, and skipping from inside the test body (Assert.Skip, SkipException, or an
+    // exception message carrying the dynamic-skip token).
+    [GeneratedRegex("""\b(SkipUnless|SkipWhen|SkipExceptions)\s*=|\bExplicit\s*=\s*true\b|\bAssert\.Skip(Unless|When)?\s*\(|\bSkipException\b|\bDynamicSkipToken\b|\$XunitDynamicSkip\$""")]
     private static partial Regex OtherWayToNotRun();
 }

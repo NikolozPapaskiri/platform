@@ -53,26 +53,34 @@ public sealed class DomainEventRegistry
     public string Serialize(IDomainEvent domainEvent) =>
         JsonSerializer.Serialize(domainEvent, domainEvent.GetType(), _jsonOptions);
 
-    /// <summary>Returns null when the stored name is unknown or the payload does not deserialize.</summary>
+    /// <summary>
+    /// Returns null when the stored name is unknown or the payload does not deserialize, with the
+    /// reason in <paramref name="error"/>.
+    /// </summary>
     /// <remarks>
     /// Not only <see cref="JsonException"/>: an event's constructor or a value type may reject the
-    /// stored values with any exception (<see cref="ArgumentException"/>, typically). Deserializing is
+    /// stored values with any exception (<see cref="ArgumentException"/>, typically), and a missing
+    /// converter throws <see cref="NotSupportedException"/>. Deserializing is CPU-only and
     /// deterministic, so a retry cannot succeed where this attempt failed; the caller parks the
     /// message instead of retrying it forever.
     /// </remarks>
-    public IDomainEvent? TryDeserialize(string name, string payload)
+    public IDomainEvent? TryDeserialize(string name, string payload, out string? error)
     {
         if (!_typesByName.TryGetValue(name, out var type))
         {
+            error = $"Unknown event type '{name}'.";
             return null;
         }
 
         try
         {
-            return JsonSerializer.Deserialize(payload, type, _jsonOptions) as IDomainEvent;
+            var domainEvent = JsonSerializer.Deserialize(payload, type, _jsonOptions) as IDomainEvent;
+            error = domainEvent is null ? "The payload is null." : null;
+            return domainEvent;
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
+            error = $"{ex.GetType().Name}: {ex.Message}";
             return null;
         }
     }
