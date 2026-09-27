@@ -9,6 +9,7 @@ using OpenTelemetry.Logs;
 using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
 using Platform.Kernel.Outbox;
+using Platform.Kernel.Persistence;
 using Platform.Kernel.Telemetry;
 using Platform.Kernel.Tenancy;
 using Platform.Kernel.Tests.Outbox.Support;
@@ -474,7 +475,9 @@ public sealed class OutboxTests(TenancyDatabase database)
     {
         var tenant = await database.CreateTenantAsync();
         await using var services = database.CreateServices(configure: s =>
-            s.AddDbContext<WidgetDbContext>((sp, o) => o.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>())));
+            s.AddDbContext<WidgetDbContext>((sp, o) => o
+                .UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>())
+                .AddInterceptors(sp.GetRequiredService<TenantSessionInterceptor>())));
         var widgetId = Guid.CreateVersion7();
 
         await RunAsAsync(services, tenant, async scope =>
@@ -514,7 +517,11 @@ public sealed class OutboxTests(TenancyDatabase database)
 
             services.AddSingleton(_log);
             services.AddSingleton<TimeProvider>(_time);
-            services.AddDbContext<WidgetDbContext>((sp, options) => options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
+            // Like PlatformDbContext, the test context must tell PostgreSQL the tenant, or row-level
+            // security rejects the outbox rows it writes.
+            services.AddDbContext<WidgetDbContext>((sp, options) => options
+                .UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>())
+                .AddInterceptors(sp.GetRequiredService<TenantSessionInterceptor>()));
             services.AddDomainEvent<WidgetRenamed>(WidgetRenamed.EventName);
             services.AddDomainEventHandler<WidgetRenamed, RecordingHandler>();
             if (withFlakyHandler)

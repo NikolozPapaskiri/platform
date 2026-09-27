@@ -49,10 +49,20 @@ public static class KernelServiceCollectionExtensions
         services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<TenantContext>());
         services.AddSingleton<TenantScopeRunner>();
 
-        // Not pooled (AddDbContextPool): a pooled context would outlive the scope whose tenant it
-        // captured. The hand-written TenantSessionInterceptor is registered here once implemented.
+        // M0 stores the current tenant in PostgreSQL session state whenever EF opens
+        // a connection. This allows RLS to protect LINQ, SaveChanges and raw SQL,
+        // including commands executed outside an explicit transaction.
+        //
+        // This uses session-scoped set_config(..., false). If a transaction-mode
+        // pooler such as PgBouncer is introduced later, this must move to
+        // transaction-local tenant state.
+        services.AddScoped<TenantSessionInterceptor>();
         services.AddDbContext<PlatformDbContext>((sp, options) =>
-            options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
+        {
+            options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>());
+            options.AddInterceptors(
+                    sp.GetRequiredService<TenantSessionInterceptor>());
+        });
 
         // Outbox: events are staged by TenantAwareDbContext.SaveChanges and dispatched in-process.
         services.TryAddSingleton(TimeProvider.System);
