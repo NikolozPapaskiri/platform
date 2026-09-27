@@ -130,6 +130,25 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
   to one Kernel-owned context, or a persistence abstractions assembly packs may reference.
 - Events are records of ids and values (JSON), never entities.
 
+### Money and payments (ADR 0004)
+
+- Money is `Money`: integer minor units plus an ISO 4217 code. Never `double`/`float` for money,
+  and never combine currencies.
+- Payments go through `IPaymentGateway` and each organizer's own merchant account. **Fulfil
+  (issue tickets) only after `GetStatusAsync` reports `Succeeded` with the expected amount.** Never
+  on the buyer's return URL, never on a webhook's contents: a webhook only triggers a status check.
+- **Fulfil at most once per `PaymentId`.** `Succeeded` is final: it stays `Succeeded` after a refund
+  or dispute, so a retry or reconciliation that sees it again must not issue tickets again. What has
+  been refunded is the platform's own record, built from `RefundAsync` results.
+- `PaymentId` and `RefundId` are idempotency keys. Reusing one with different details throws
+  `PaymentIdempotencyConflictException`. A retry after `Failed` is a new payment with a new
+  `PaymentId`. `PaymentProviderUnavailableException` means "unknown", never "not paid";
+  `PaymentRequestRejectedException` means a definite "no".
+- `Money` and `TenantId` serialize through their own JSON converters, which validate on read. Any
+  new value type that goes into an event needs the same, plus a round-trip test.
+- Every real adapter derives from `tests/Kernel.Tests/Payments/PaymentGatewayContractTests` and must
+  pass it against the provider's sandbox. `FakePaymentGateway` is for tests only.
+
 ## 6. Hand-write boundary (critical)
 
 Nika writes these parts himself, for learning. **Do not implement them**: not as an example, not in

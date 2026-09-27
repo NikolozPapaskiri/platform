@@ -1,9 +1,13 @@
+using System.Text.Json.Serialization;
+
 namespace Platform.Kernel.Contracts.Tenancy;
 
 /// <summary>
 /// Identifies a tenant (an organizer). A dedicated type instead of a bare <see cref="Guid"/>, so a
 /// tenant id cannot be passed where an order id or event id is expected, and vice versa.
 /// </summary>
+/// <remarks>In JSON it is a plain GUID string, read through <see cref="TenantIdJsonConverter"/>.</remarks>
+[JsonConverter(typeof(TenantIdJsonConverter))]
 public readonly record struct TenantId
 {
     public TenantId(Guid value)
