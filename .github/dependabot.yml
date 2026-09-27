@@ -1,0 +1,56 @@
+# Dependency update pull requests, gated by CI like any other change. Lessons carried over from
+# the previous repository:
+#  - Grouped per ecosystem: a week's updates arrive as one reviewable PR, not a dozen.
+#  - Major versions are ignored except for GitHub Actions. A major bump (EF Core, Npgsql,
+#    PostgreSQL, the SDK) is deliberate upgrade work, not an automated PR. Security fixes still
+#    arrive as minor and patch updates. Action majors are how deprecations get fixed.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: "/" # Directory.Packages.props (central package management) and dotnet-tools.json
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      nuget:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: dotnet-sdk
+    directory: "/" # global.json
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/" # Dockerfile base images
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      docker:
+        patterns: ["*"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: docker-compose
+    directory: "/" # docker-compose.yml (local PostgreSQL)
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
