@@ -89,6 +89,14 @@ public sealed class TenancyDatabase : IAsyncLifetime
             insert.Parameters.Add(new NpgsqlParameter { Value = id });
             insert.Parameters.Add(new NpgsqlParameter { Value = tenant.Value });
             await insert.ExecuteNonQueryAsync();
+
+            // A receipt per message, so row-level security can be tested on both outbox tables.
+            await using var receipt = dataSource.CreateCommand(
+                "INSERT INTO outbox_handler_receipts (message_id, handler, tenant_id, processed_at) " +
+                "VALUES ($1, 'Seeded', $2, now())");
+            receipt.Parameters.Add(new NpgsqlParameter { Value = id });
+            receipt.Parameters.Add(new NpgsqlParameter { Value = tenant.Value });
+            await receipt.ExecuteNonQueryAsync();
         }
 
         // A tenant-owned table for a test-only entity that raises domain events (see WidgetDbContext).

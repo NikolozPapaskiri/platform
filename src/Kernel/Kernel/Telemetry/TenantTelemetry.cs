@@ -29,6 +29,12 @@ public static class TenantTelemetry
     /// <summary>Binds the unit of work's tenant context to this call path, before the tenant is known.</summary>
     internal static void Bind(ITenantContext context) => _context.Value = context;
 
+    /// <summary>
+    /// Binds a tenant that is already known, for background work that acts for one tenant across
+    /// several short tenant scopes (each of which binds its own context inside this one).
+    /// </summary>
+    internal static void BindKnownTenant(TenantId tenant) => _context.Value = new KnownTenant(tenant);
+
     /// <summary>Called by <c>TenantContext.Set</c> once the tenant is known.</summary>
     internal static void OnResolved(ITenantContext context, TenantId tenant)
     {
@@ -43,5 +49,12 @@ public static class TenantTelemetry
         {
             current.SetTag(TenantIdAttribute, tenant.ToString());
         }
+    }
+
+    private sealed class KnownTenant(TenantId tenant) : ITenantContext
+    {
+        public bool IsResolved => true;
+
+        public TenantId TenantId => tenant;
     }
 }

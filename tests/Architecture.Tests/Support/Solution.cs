@@ -11,6 +11,7 @@ internal static class Solution
 {
     public const string ContractsAssembly = "Platform.Kernel.Contracts";
     public const string KernelAssembly = "Platform.Kernel";
+    public const string HostAssembly = "Platform.Api";
     public const string PackProjectPrefix = "Packs.";
     public const string PackAssemblyPrefix = "Platform." + PackProjectPrefix;
 

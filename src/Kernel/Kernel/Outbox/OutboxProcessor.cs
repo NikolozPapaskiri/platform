@@ -6,6 +6,7 @@ using Npgsql;
 using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
 using Platform.Kernel.Persistence;
+using Platform.Kernel.Telemetry;
 using Platform.Kernel.Tenancy;
 using Platform.Kernel.Tenancy.Catalog;
 
@@ -64,6 +65,11 @@ public sealed partial class OutboxProcessor(
     /// <summary>Claims and processes up to <see cref="OutboxOptions.BatchSize"/> of the tenant's due messages.</summary>
     public async Task<int> ProcessTenantAsync(TenantId tenant, CancellationToken cancellationToken)
     {
+        // The tenant scopes below each last one database call, but the logs between them (retry,
+        // parked, unreadable, lease lost) are this tenant's too. Bound in this async method, so the
+        // binding ends when it returns and the next tenant starts clean.
+        TenantTelemetry.BindKnownTenant(tenant);
+
         var processed = 0;
         while (processed < Options.BatchSize)
         {
@@ -200,15 +206,21 @@ public sealed partial class OutboxProcessor(
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        catch (DbUpdateException ex) when (IsReceiptConflict(db, ex))
         {
             // Another dispatcher (one whose lease expired while it worked) finished this handler first.
             // Its work is committed; this transaction's copy is rolled back on dispose. Done, not failed.
+            // Only the receipt's own key counts: any other unique violation is the handler's work
+            // failing, and must fail the attempt like any other exception.
             return;
         }
 
         await transaction.CommitAsync(cancellationToken);
     }
+
+    private static bool IsReceiptConflict(DbContext db, DbUpdateException exception) =>
+        exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } violation &&
+        violation.ConstraintName == db.Model.FindEntityType(typeof(OutboxHandlerReceipt))?.FindPrimaryKey()?.GetName();
 
     private async Task RecordFailureAsync(
         TenantId tenant,
