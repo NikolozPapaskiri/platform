@@ -10,6 +10,11 @@ A multi-tenant SaaS **kernel** with vertical **packs**. The first pack is event 
 guests by default, and money goes straight to the organizer's own merchant account. There is no
 cross-organizer marketplace in scope.
 
+The same code runs as **one deployment per client instance** (ADR 0006). Each instance is a
+client's own platform, with one or more organizers inside it. Instances differ only by
+configuration, feature toggles, and which packs are enabled; custom code for one client is a pack
+enabled only for that client.
+
 - **Owner:** Nika (@NikolozPapaskiri). Under 10 hours per week, so scope discipline beats everything.
 - **Goals, weighted equally:** ship the product, and Nika learning .NET/C# and Azure deeply.
 - **Review:** Nika plus one trusted reviewer. Every change is a pull request. Nothing is pushed to `main`.
@@ -17,7 +22,8 @@ cross-organizer marketplace in scope.
 
 ## 2. Build, run, test
 
-Prerequisites: .NET SDK 10.0.301 (pinned in `global.json`), Docker Desktop.
+Prerequisites: the .NET SDK version pinned in `global.json` (Dependabot bumps it; install the new
+one with `winget install --id Microsoft.DotNet.SDK.10 --exact`), Docker Desktop.
 
 ```bash
 dotnet tool restore                                    # local tools (dotnet-ef), pinned in dotnet-tools.json
@@ -192,6 +198,8 @@ code only if he explicitly asks for code.
   `SkipException`, or a dynamic-skip message fails the architecture tests.
 - Use `IgnoreQueryFilters()` outside Kernel tenancy code, or without a comment explaining why.
 - Hardcode tenant ids or branch on a specific tenant.
+- Branch on a specific client or instance name, or fork code for one client. Per-client behaviour
+  is configuration, a feature toggle, or a pack enabled for that instance (ADR 0006).
 - Add features beyond the current milestone.
 - Push to `main`.
 - Change a decision in `docs/adr/` silently. Propose a new ADR and ask.
