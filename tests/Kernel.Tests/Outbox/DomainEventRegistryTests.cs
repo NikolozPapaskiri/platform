@@ -34,5 +34,27 @@ public sealed class DomainEventRegistryTests
         Assert.Null(_registry.TryDeserialize(EventName, payload));
     }
 
+    [Fact]
+    public void EventWhoseConstructorRejectsThePayload_IsUnreadable_NotAnEscapingException()
+    {
+        // Any exception, not only JsonException: otherwise the dispatcher never parks the message and
+        // it is claimed again every time its lease expires.
+        var registry = new DomainEventRegistry([new DomainEventRegistration(typeof(Validated), "test.validated")], []);
+
+        Assert.Null(registry.TryDeserialize("test.validated", """{"quantity":0}"""));
+        Assert.Equal(new Validated(2), registry.TryDeserialize("test.validated", """{"quantity":2}"""));
+    }
+
     private sealed record OrderPaid(Guid OrderId, TenantId Organizer, Money Total) : IDomainEvent;
+
+    private sealed record Validated : IDomainEvent
+    {
+        public Validated(int quantity)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
+            Quantity = quantity;
+        }
+
+        public int Quantity { get; }
+    }
 }
