@@ -118,6 +118,19 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.All(seen, tenant => Assert.Equal(database.TenantA.Value, tenant));
     }
 
+    [Fact(Skip = "HAND-WRITE: Nika")]
+    public async Task RawSql_AsTenantA_SeesOnlyTenantAReceipts()
+    {
+        // outbox_handler_receipts came after the AddRowLevelSecurity migration, so it needs its own policy.
+        await using var services = database.CreateServices();
+
+        var seen = await services.GetRequiredService<TenantScopeRunner>()
+            .RunAsTenantAsync(database.TenantA, TenantRows.ReadReceiptsWithRawSqlAsync);
+
+        Assert.NotEmpty(seen);
+        Assert.All(seen, tenant => Assert.Equal(database.TenantA.Value, tenant));
+    }
+
     // ---- 4. The database rejects writes of another tenant's id (WITH CHECK) ----
 
     [Fact(Skip = "HAND-WRITE: Nika")]
@@ -129,6 +142,21 @@ public sealed class TenancyContractTests(TenancyDatabase database)
             InRolledBackTransactionAsync(scope, db => Assert.ThrowsAsync<PostgresException>(() =>
                 db.Database.ExecuteSqlAsync(
                     $"INSERT INTO outbox_messages (id, tenant_id, type, payload, occurred_at) VALUES ({Guid.CreateVersion7()}, {database.TenantB.Value}, 'Probe', '{{}}'::jsonb, now())",
+                    Ct))));
+
+        Assert.Equal(RlsViolation, error.SqlState);
+    }
+
+    [Fact(Skip = "HAND-WRITE: Nika")]
+    public async Task RawSql_InsertingAReceiptForAnotherTenant_IsRejectedByTheDatabase()
+    {
+        await using var services = database.CreateServices();
+        var tenantBMessage = database.TenantBRows[0];
+
+        var error = await services.GetRequiredService<TenantScopeRunner>().RunAsTenantAsync(database.TenantA, scope =>
+            InRolledBackTransactionAsync(scope, db => Assert.ThrowsAsync<PostgresException>(() =>
+                db.Database.ExecuteSqlAsync(
+                    $"INSERT INTO outbox_handler_receipts (message_id, handler, tenant_id, processed_at) VALUES ({tenantBMessage}, 'Probe', {database.TenantB.Value}, now())",
                     Ct))));
 
         Assert.Equal(RlsViolation, error.SqlState);
