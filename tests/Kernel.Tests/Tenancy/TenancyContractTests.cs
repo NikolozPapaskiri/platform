@@ -34,7 +34,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 1. Tenant resolution from the request host ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task Resolution_KnownHost_ResolvesItsTenant()
     {
         var (status, tenant) = await RequestAsync(TenancyDatabase.TenantAHost);
@@ -43,7 +43,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(database.TenantA.ToString(), tenant);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task Resolution_HostIsMatchedCaseInsensitively()
     {
         // Host names are case-insensitive (RFC 9110 section 4.2.3); browsers usually lower-case them, but not every client does.
@@ -53,7 +53,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(database.TenantB.ToString(), tenant);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task Resolution_UnknownHost_Returns404()
     {
         var (status, _) = await RequestAsync(TenancyDatabase.UnknownHost);
@@ -61,7 +61,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(HttpStatusCode.NotFound, status);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task Resolution_SuspendedTenant_Returns403()
     {
         var (status, _) = await RequestAsync(TenancyDatabase.SuspendedHost);
@@ -69,7 +69,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(HttpStatusCode.Forbidden, status);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task Resolution_TenantAppearsOnTheRequestsLogs()
     {
         // ADR 0003: tenant.id on every log once the tenant is resolved. The telemetry middleware runs
@@ -106,7 +106,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 3. Row-level security on its own (raw SQL, no EF Core query filter) ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_AsTenantA_SeesOnlyTenantARows()
     {
         await using var services = database.CreateServices();
@@ -118,7 +118,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.All(seen, tenant => Assert.Equal(database.TenantA.Value, tenant));
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_AsTenantA_SeesOnlyTenantAReceipts()
     {
         // outbox_handler_receipts came after the AddRowLevelSecurity migration, so it needs its own policy.
@@ -133,7 +133,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 4. The database rejects writes of another tenant's id (WITH CHECK) ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_InsertingARowForAnotherTenant_IsRejectedByTheDatabase()
     {
         await using var services = database.CreateServices();
@@ -147,7 +147,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(RlsViolation, error.SqlState);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_InsertingAReceiptForAnotherTenant_IsRejectedByTheDatabase()
     {
         await using var services = database.CreateServices();
@@ -162,7 +162,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Equal(RlsViolation, error.SqlState);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_MovingARowToAnotherTenant_IsRejectedByTheDatabase()
     {
         await using var services = database.CreateServices();
@@ -179,7 +179,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 5. Tenant context never leaks through a pooled connection ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task PooledConnection_DoesNotCarryTheTenantToTheNextUser()
     {
         // A pool of one, so every scope below reuses the same physical connection, and no reset
@@ -202,7 +202,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 6. Every tenant-owned table has row-level security enabled and forced ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task EveryTenantOwnedTable_HasRowLevelSecurityEnabledAndForced()
     {
         // The role half of contract test 6 runs today in TenantAwareDbContextTests.
@@ -230,7 +230,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
 
     // ---- 7. No tenant context means no tenant-owned rows, unless running as a named tenant ----
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_WithoutTenant_ReadsNoTenantOwnedRows()
     {
         await using var services = database.CreateServices();
@@ -241,7 +241,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.Empty(seen);
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task RawSql_RunningAsANamedTenant_ReadsThatTenantsRows()
     {
         await using var services = database.CreateServices();
@@ -253,7 +253,7 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         Assert.All(seen, tenant => Assert.Equal(database.TenantB.Value, tenant));
     }
 
-    [Fact(Skip = "HAND-WRITE: Nika")]
+    [Fact]
     public async Task EfInsert_AsTenant_StillWorksUnderRowLevelSecurity()
     {
         // Guards against policies so strict that the application itself can no longer write.
@@ -291,8 +291,17 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         // mixed-case host passed only in the URI would reach the middleware already lower-cased.
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"http://{host}/"));
         request.Headers.Host = host;
-        using var response = await client.SendAsync(request, Ct);
-        return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        try
+        {
+            using var response = await client.SendAsync(request, Ct);
+            return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
+        }
+        finally
+        {
+            // Stop before disposing, even when the request throws: otherwise the outbox dispatcher
+            // keeps polling a disposed service provider and floods the output with errors.
+            await app.StopAsync(Ct);
+        }
     }
 
     /// <summary>
