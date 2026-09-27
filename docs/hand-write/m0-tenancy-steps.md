@@ -9,7 +9,12 @@ stalls, ask for the next hint on that step, or explicitly for the code of that s
 
 ## 0. Before you start
 
-- Branch from `main`, for example `m0/hand-write-tenancy`.
+- Branch from `main`, named per AGENTS.md section 7, for example `m0/8-tenancy-hand-write`.
+- **Reset your local database once:** `docker compose down -v`, then `docker compose up -d --wait`,
+  and apply the migrations again (AGENTS.md section 2). Step C1 fills in a migration your local
+  database has already applied while it was empty, so without a reset `dotnet ef database update`
+  does nothing and the psql experiments in C1.5 show no row-level security at all. This deletes
+  local data only.
 - `dotnet tool restore`, `docker compose up -d --wait`, then `dotnet test`: everything green, with 15
   tests skipped as `HAND-WRITE: Nika`.
 - **How the tests use the database.** They start their own PostgreSQL container (Testcontainers),
@@ -42,6 +47,10 @@ File: `src/Kernel/Kernel/Persistence/Migrations/20260926181718_AddRowLevelSecuri
 migration runs before `outbox_handler_receipts` exists, so it covers `outbox_messages` only (C2
 covers the receipts).
 
+Editing an applied migration is normally forbidden (see C2). This one is the exception: it was
+created as a planned empty slot for you, no shared or deployed database exists yet, and CI builds a
+fresh database on every run. That is also why step 0 resets your local database.
+
 ### Step C1.1: the four statements
 
 For one table, `Up` does four things:
@@ -61,7 +70,10 @@ For one table, `Up` does four things:
 `Down` undoes the steps in reverse order: drop the policy, stop forcing, disable.
 
 Decide whether the policy names a role (`TO platform_app`) or applies to everyone (leave `TO` out,
-which means `PUBLIC`). Ask yourself which of the two fails closed if a new role appears later.
+which means `PUBLIC`). Both fail closed: a role no policy applies to sees zero rows. The questions
+that separate them: which roles can use the tenant mechanism at all, and what happens to the owner
+under `FORCE`? (In Azure the owner is not a superuser, so a data migration run as the owner on a
+forced table touches zero rows either way. Remember that when M1 needs one.)
 
 ### Step C1.2: reading the current tenant safely
 
@@ -74,14 +86,22 @@ This is the step that goes wrong most often. Use `current_setting(name, missing_
 | Set to a tenant | The id as text. |
 | Set, but empty | `''`. This happens when B deliberately sets "no tenant", and also in a pooled session after a transaction-local value ended: PostgreSQL keeps the parameter defined and it reads back as an empty string, not `NULL`. |
 
-The column is `uuid`; the setting is `text`. Casting `''` to `uuid` raises "invalid input syntax
-for type uuid", which again breaks contract 7 ("zero rows, not an error"). So turn an empty string
-into `NULL` first (look up `NULLIF`), then cast. Comparing `tenant_id` with `NULL` yields `NULL`, and
-a policy treats `NULL` as false. The result is zero rows, and no error.
+The column is `uuid`; the setting is `text`. Try to work out the expression from that table before
+opening the answer.
+
+<details>
+<summary>How the expression handles all three</summary>
+
+Casting `''` to `uuid` raises "invalid input syntax for type uuid", which again breaks contract 7
+("zero rows, not an error"). So turn an empty string into `NULL` first (look up `NULLIF`), then
+cast. Comparing `tenant_id` with `NULL` yields `NULL`, and a policy treats `NULL` as false. The
+result is zero rows, and no error.
 
 Performance: written plainly, the expression is evaluated once per row. Wrapped in a scalar
 subquery, `(SELECT ...)`, the planner computes it once per statement (an "InitPlan"). You can see
 the difference with `EXPLAIN` in step C1.5.
+
+</details>
 
 ### Step C1.3: putting the SQL into the migration
 
@@ -101,19 +121,24 @@ statements in the `AddRowLevelSecurity` section, and check that `Down` mirrors `
 ### Step C1.5: try it by hand (optional, but it teaches the most)
 
 1. Apply the migration to the local database with `dotnet ef database update` and the owner
-   connection string (see AGENTS.md section 2).
+   connection string (see AGENTS.md section 2). If you skipped the reset in step 0, this does
+   nothing: check with `\d outbox_messages` in psql, which lists the policies.
 2. As `platform_owner`, insert two rows into `outbox_messages` with two different made-up tenant ids.
    The columns are `id`, `tenant_id`, `type`, `payload` (a `jsonb` value such as `'{}'`), and
    `occurred_at`.
-3. Connect as `platform_app` (password `platform_app`, host port 5433) and try each of these:
+3. Connect as `platform_app` (password `platform_app`, host port 5433) and try these, in this order:
    - Count the rows with nothing set: expect 0.
    - Set the parameter for the session with `set_config(name, value, false)` to one tenant id and
      count again: expect only that tenant's row.
+   - Still set to that tenant, insert a row with the **other** tenant's id: expect "new row violates
+     row-level security policy". (Doing this with no tenant set would also fail, but for a different
+     reason, so it would not prove `WITH CHECK` works.)
    - Set it to `''`: expect 0 rows, and no error.
-   - Insert a row with the other tenant's id: expect "new row violates row-level security policy".
-   - Inside `BEGIN`, set it with `set_config(name, value, true)` (transaction-local), `COMMIT`, then
-     read it back with `current_setting`: expect the empty string from step C1.2.
-4. Connect as `platform_owner`: it sees everything even though the table is forced, because it is a
+4. Open a **fresh** `platform_app` connection. Read the parameter with `current_setting(name, true)`:
+   expect `NULL`. Inside `BEGIN`, set it with `set_config(name, value, true)` (transaction-local),
+   `COMMIT`, and read it again: expect `''`, the case from step C1.2. It has to be a fresh connection,
+   because the earlier session already holds `''`.
+5. Connect as `platform_owner`: it sees everything even though the table is forced, because it is a
    superuser locally. That is why a policy that "works" when you query as the owner proves nothing.
 
 ## 3. B: `TenantSessionInterceptor`
@@ -122,19 +147,25 @@ File: `src/Kernel/Kernel/Persistence/TenantSessionInterceptor.cs`.
 
 ### Step B1: pick the mechanism
 
-This choice is the real exercise. There are three workable designs:
+There are three workable designs. Rank them yourself against the contract tests and against a
+pooler before opening the recommendation.
 
 | | How | Good | Bad |
 |---|---|---|---|
 | 1. Session value on connection open | Each time EF Core opens a connection, run `set_config(name, value, false)`. The value is the tenant id, or `''` when there is no tenant. Always overwrite, never skip. | Simple. Covers LINQ, `SaveChanges`, and raw SQL, because all three open the connection through EF Core. Passes contract 5, since every open overwrites whatever the last user left. | One extra round trip per connection open. **Not safe behind a transaction-mode pooler** such as PgBouncer: consecutive transactions from one client connection can run on different server sessions, so a session value can land in the wrong one. |
-| 2. Transaction-local value when a transaction starts | A transaction interceptor runs `set_config(name, value, true)` after `BEGIN`. | Safe behind any pooler. | Statements outside an explicit transaction never see the value, so they read zero rows. Every read would need a transaction. Contract 3 fails as written. |
-| 3. Transaction-local value sent with every command | A command interceptor puts `set_config(name, value, true)` in the same batch as each command. Npgsql sends the statements of one batch as one implicit transaction, so the local value covers the command. | Safe behind any pooler. No extra round trip. | Rewrites every command's text and parameters. More ways to get it subtly wrong. |
+| 2. Transaction-local value when a transaction starts | A transaction interceptor runs `set_config(name, value, true)` after `BEGIN`. | Safe behind any pooler. The usual production pattern behind PgBouncer, when every unit of work (a request, a job) runs in one transaction. | Statements outside an explicit transaction never see the value, so they read zero rows. Every read needs a transaction. Contract 3 fails as written. |
+| 3. Transaction-local value sent with every command | A command interceptor puts `set_config(name, value, true)` in the same batch as each command. Npgsql sends the statements of one batch as one implicit transaction, so the local value covers the command. | Safe behind any pooler. No extra round trip. | Rewrites every command's text and parameters. The added `SELECT` also returns a result set of its own, in front of the one EF Core expects to read. More ways to get it subtly wrong. |
 
-**Recommendation for M0: design 1.** M0 connects to PostgreSQL directly. Say in your PR that M1
-must not put a transaction-mode pooler in front of the application without moving to design 3.
-Azure Database for PostgreSQL Flexible Server's built-in PgBouncer runs in transaction mode by
-default. Being able to explain why is a strong interview answer. If you pick 2 or 3 instead, the
-steps below change; ask.
+<details>
+<summary>Recommendation</summary>
+
+**For M0: design 1.** M0 connects to PostgreSQL directly. Say in your PR that M1 must not put a
+transaction-mode pooler in front of the application without moving to design 2 or 3, and that
+this choice belongs in an M1 ADR. Azure Database for PostgreSQL Flexible Server's built-in
+PgBouncer runs in transaction mode by default. Being able to explain why is a strong interview
+answer. If you pick 2 or 3 now instead, the steps below change; ask.
+
+</details>
 
 ### Step B2: the class shape (design 1)
 
@@ -142,15 +173,24 @@ steps below change; ask.
   base class whose virtual methods do nothing. It replaces the bare `IInterceptor` marker in the stub.
 - Override the callback that fires **after** a connection opened, in **both** forms:
   `ConnectionOpened` and `ConnectionOpenedAsync`. EF Core calls the synchronous one for synchronous
-  APIs (`SaveChanges()`, `ToList()`) and the asynchronous one for async APIs. Override only one, and
-  the other path runs with no tenant; the tests might not notice, production would.
+  APIs (`SaveChanges()`, `ToList()`) and the asynchronous one for async APIs. Override only one,
+  and the other path runs with **whatever the session already holds**. With Npgsql's reset on
+  close that is "no tenant". But without it (contract 5's setup, or behind a pooler) it is the
+  previous user's tenant: another tenant's data, which fails **open**. The tests might not notice;
+  production would.
 - In the callback you receive the open `DbConnection`. Create a command on it, set its text to a
   `SELECT` of `set_config` with the value as a **parameter**, and execute it. In the async form,
   pass the `CancellationToken` along.
+- **If setting the value fails, the connection must not be used.** When the command throws (a
+  cancellation, say), EF Core rethrows, but the physical connection may stay open. A later operation
+  on the same context would then find it open, not reopen it, and so not run the interceptor. Think
+  about closing the connection before rethrowing, and check it with a test if you can.
 - **Why `set_config` rather than `SET`.** `SET name = value` is a utility statement, and PostgreSQL
   does not accept bind parameters in it. `set_config` is an ordinary function, so it does. Never
   concatenate the tenant id into the SQL text. A GUID cannot contain a quote, but the habit is what
-  matters, and a parameterised statement also stays one reusable prepared statement.
+  matters.
+- The interceptor only sees connections EF Core opens. Code that takes `Database.GetDbConnection()`
+  and opens it directly bypasses it, so don't.
 
 ### Step B3: where the tenant comes from
 
@@ -167,6 +207,9 @@ The interceptor needs the **current scope's** `ITenantContext`.
   reuse it for every later request (a captive dependency). This is also why `AddKernel` does not use
   `AddDbContextPool`; read the comment there.
 - The value to send: the tenant id as text when `IsResolved`, otherwise `""`.
+- **Read the tenant inside the callback, never in the constructor.** The middleware resolves
+  `PlatformDbContext` (and so builds its options and the interceptor) before it calls `Set`. A value
+  cached in the constructor would therefore always be "no tenant".
 
 ### Step B4: register it
 
@@ -204,7 +247,7 @@ Then run the whole suite: `OutboxTests` must be green again.
 | Symptom | Likely cause |
 |---|---|
 | "invalid input syntax for type uuid" | Step C1.2: the empty string is cast without `NULLIF`. |
-| Everything returns zero rows | The parameter name differs between B and C, or the interceptor is not registered. |
+| Everything returns zero rows | The parameter name differs between B and C, the interceptor is not registered, or it read the tenant in its constructor. |
 | Contract 5 fails | Something skips the overwrite when there is no tenant. |
 | Works with async calls, fails with sync ones | Only one of the two callbacks is overridden. |
 
@@ -223,8 +266,10 @@ Then run the whole suite: `OutboxTests` must be green again.
   `outbox_handler_receipts`.
 - **This is the M1 pattern.** Every migration that creates a tenant-owned table ends with its
   row-level security statements. Consider whether a small helper, such as an extension method on
-  `MigrationBuilder` that every future migration calls, is worth writing. If you write one, it is
-  part of your hand-write.
+  `MigrationBuilder` that every future migration calls, is worth writing. The tradeoff: a helper
+  makes old migrations depend on code that can change later, and a change to it silently changes
+  what those old migrations do on a fresh database. Literal SQL in each migration is repetitive but
+  frozen. If you write one, it is part of your hand-write, and it should never change once used.
 - Remove the `Skip` from `RawSql_AsTenantA_SeesOnlyTenantAReceipts`,
   `RawSql_InsertingAReceiptForAnotherTenant_IsRejectedByTheDatabase`, and contract 6
   (`EveryTenantOwnedTable_HasRowLevelSecurityEnabledAndForced`). Contract 6 reads the tenant-owned
