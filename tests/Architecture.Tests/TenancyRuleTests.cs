@@ -18,13 +18,26 @@ public sealed class TenancyRuleTests
     {
         // The model rules below inspect the contexts listed in CreateContexts. A new context that is
         // not listed there would escape them, so it must fail here until it is added.
-        var contexts = new[] { typeof(PlatformDbContext).Assembly }
-            .Concat(Solution.PackAssemblies)
-            .SelectMany(assembly => assembly.GetTypes())
+        var contexts = CodeTypes()
             .Where(type => type is { IsAbstract: false } && type.IsSubclassOf(typeof(TenantAwareDbContext)))
             .ToList();
 
         Assert.Equal([typeof(PlatformDbContext)], contexts);
+    }
+
+    [Fact]
+    public void EveryDbContext_IsTenantAware()
+    {
+        // A plain DbContext gets no tenant filter and no write checks, and the model rules below never
+        // see it. It is also the obvious workaround for packs until the M1 persistence ADR lands.
+        var plain = CodeTypes()
+            .Where(type => type.IsSubclassOf(typeof(DbContext)) &&
+                           type != typeof(TenantAwareDbContext) &&
+                           !type.IsSubclassOf(typeof(TenantAwareDbContext)))
+            .Select(type => type.FullName)
+            .ToList();
+
+        Assert.Empty(plain);
     }
 
     [Fact]
@@ -93,6 +106,12 @@ public sealed class TenancyRuleTests
 
         Assert.Empty(violations);
     }
+
+    /// <summary>Every type in the application's own code: the Kernel, the host, and every pack.</summary>
+    private static IEnumerable<Type> CodeTypes() =>
+        new[] { typeof(PlatformDbContext).Assembly, Assembly.Load(new AssemblyName(Solution.HostAssembly)) }
+            .Concat(Solution.PackAssemblies)
+            .SelectMany(assembly => assembly.GetTypes());
 
     private static IEnumerable<TenantAwareDbContext> CreateContexts()
     {

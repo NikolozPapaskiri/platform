@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
+using Platform.Kernel.Outbox;
+using Platform.Kernel.Persistence;
 
 namespace Platform.Kernel.Tests.Outbox.Support;
 
@@ -98,6 +100,20 @@ public sealed class FlakyHandler(HandlerLog log, ITenantContext tenant) : IDomai
             throw new InvalidOperationException("Simulated handler failure.");
         }
 
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Writes, through the scope's PlatformDbContext, a row that breaks a unique constraint other than
+/// the receipt's: an outbox message with the id of the message being handled. The failure surfaces
+/// only when the receipt is saved, in the same SaveChanges.
+/// </summary>
+public sealed class ConflictingWriteHandler(PlatformDbContext db, TimeProvider time) : IDomainEventHandler<WidgetRenamed>
+{
+    public Task HandleAsync(WidgetRenamed domainEvent, DomainEventContext context, CancellationToken cancellationToken)
+    {
+        db.OutboxMessages.Add(new OutboxMessage(context.MessageId, "Duplicate", "{}", time.GetUtcNow()));
         return Task.CompletedTask;
     }
 }

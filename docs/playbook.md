@@ -52,3 +52,6 @@ Changing any of these needs a new ADR, proposed and approved before the code cha
 **M0 is done when** all seven are merged with CI green on `main`, the skipped `HAND-WRITE` tests are
 listed in `docs/hand-write/m0-tenancy.md`, anyone can clone and run everything from `AGENTS.md`, and
 there is no M1 feature code.
+
+**M1 cannot start until** ADR 0005 (pack persistence, currently Proposed) is accepted, and the M0
+hand-write contract tests pass.

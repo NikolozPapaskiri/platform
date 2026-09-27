@@ -97,8 +97,10 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
 - Shared database, shared schema. Every tenant-owned table has `TenantId` and implements `ITenantOwned`.
   Its DbContext derives from `TenantAwareDbContext`, which adds the tenant query filter, stamps
   `TenantId` on insert, and rejects writes without a tenant or with another tenant's id. An entity
-  that has a `TenantId` but is platform catalog data must be marked `[TenantCatalog]`
-  (architecture tests enforce both).
+  that has a `TenantId` but is platform catalog data must be marked `[TenantCatalog]`. There is no
+  plain `DbContext` anywhere in the Kernel, the host, or a pack. Architecture tests enforce the
+  query filter on every `ITenantOwned` entity, the `[TenantCatalog]` marking, and the no-plain-context
+  rule.
 - **Two isolation layers, both mandatory:** EF Core global query filters AND PostgreSQL row-level
   security. Neither is optional because the other exists.
 - The tenant is resolved from the **request host** through the tenant catalog (`Tenants`,
@@ -125,9 +127,9 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
   Kernel's `PlatformDbContext` work commits atomically with the receipt today. **Treat every handler
   effect as possibly repeated and key it on `context.MessageId`** until the M1 ADR decides how pack
   contexts share that transaction.
-- **Open M1 decision (ADR required before M1 code):** packs cannot reference the Kernel, so they
-  cannot derive from `TenantAwareDbContext`. Options include packs contributing entity configuration
-  to one Kernel-owned context, or a persistence abstractions assembly packs may reference.
+- **Open M1 decision, blocking all M1 code:** `docs/adr/0005-pack-persistence.md` (status
+  **Proposed**) decides how packs persist data and share the receipt's transaction. Until Nika
+  accepts it, do not add pack entities, pack DbContexts, or pack migrations; ask him to decide.
 - Events are records of ids and values (JSON), never entities.
 
 ### Money and payments (ADR 0004)
@@ -185,7 +187,9 @@ code only if he explicitly asks for code.
 ## 8. Never
 
 - Commit secrets, or connection strings containing real credentials.
-- Skip or disable tests to make CI pass. `HAND-WRITE` markers are the only allowed skips.
+- Skip or disable tests to make CI pass. `Skip = "HAND-WRITE: Nika"` is the only allowed skip;
+  any other skip reason, `SkipUnless`/`SkipWhen`/`SkipExceptions`, `Explicit = true`, `Assert.Skip`,
+  `SkipException`, or a dynamic-skip message fails the architecture tests.
 - Use `IgnoreQueryFilters()` outside Kernel tenancy code, or without a comment explaining why.
 - Hardcode tenant ids or branch on a specific tenant.
 - Add features beyond the current milestone.

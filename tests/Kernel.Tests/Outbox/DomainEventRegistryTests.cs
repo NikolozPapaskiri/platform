@@ -20,7 +20,7 @@ public sealed class DomainEventRegistryTests
     {
         var paid = new OrderPaid(Guid.NewGuid(), TenantId.New(), Money.Of(2500, "GEL"));
 
-        var read = _registry.TryDeserialize(EventName, _registry.Serialize(paid));
+        var read = _registry.TryDeserialize(EventName, _registry.Serialize(paid), out _);
 
         Assert.Equal(paid, read);
     }
@@ -31,8 +31,32 @@ public sealed class DomainEventRegistryTests
         // TryDeserialize returning null parks the message for an operator; a default value would not.
         const string payload = """{"orderId":"0190a1b2-0000-7000-8000-000000000001","organizer":"00000000-0000-0000-0000-000000000000","total":{"amountMinor":2500,"currency":"GEL"}}""";
 
-        Assert.Null(_registry.TryDeserialize(EventName, payload));
+        Assert.Null(_registry.TryDeserialize(EventName, payload, out var error));
+        Assert.Contains("JsonException", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EventWhoseConstructorRejectsThePayload_IsUnreadable_NotAnEscapingException()
+    {
+        // Any exception, not only JsonException: otherwise the dispatcher never parks the message and
+        // it is claimed again every time its lease expires.
+        var registry = new DomainEventRegistry([new DomainEventRegistration(typeof(Validated), "test.validated")], []);
+
+        Assert.Null(registry.TryDeserialize("test.validated", """{"quantity":0}""", out var error));
+        Assert.Contains("ArgumentOutOfRangeException", error, StringComparison.Ordinal);
+        Assert.Equal(new Validated(2), registry.TryDeserialize("test.validated", """{"quantity":2}""", out _));
     }
 
     private sealed record OrderPaid(Guid OrderId, TenantId Organizer, Money Total) : IDomainEvent;
+
+    private sealed record Validated : IDomainEvent
+    {
+        public Validated(int quantity)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(quantity);
+            Quantity = quantity;
+        }
+
+        public int Quantity { get; }
+    }
 }

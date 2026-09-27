@@ -25,4 +25,10 @@ internal static class TenantRows
         services.GetRequiredService<PlatformDbContext>().Database
             .SqlQueryRaw<Guid>("SELECT tenant_id AS \"Value\" FROM outbox_messages")
             .ToListAsync(TestContext.Current.CancellationToken);
+
+    /// <summary>The same for handler receipts, the second tenant-owned table.</summary>
+    public static Task<List<Guid>> ReadReceiptsWithRawSqlAsync(IServiceProvider services) =>
+        services.GetRequiredService<PlatformDbContext>().Database
+            .SqlQueryRaw<Guid>("SELECT tenant_id AS \"Value\" FROM outbox_handler_receipts")
+            .ToListAsync(TestContext.Current.CancellationToken);
 }

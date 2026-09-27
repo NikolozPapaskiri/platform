@@ -2,11 +2,14 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Npgsql;
+using OpenTelemetry.Logs;
 using Platform.Kernel.Contracts.Events;
 using Platform.Kernel.Contracts.Tenancy;
 using Platform.Kernel.Outbox;
+using Platform.Kernel.Telemetry;
 using Platform.Kernel.Tenancy;
 using Platform.Kernel.Tests.Outbox.Support;
 using Platform.Kernel.Tests.Support;
@@ -165,6 +168,41 @@ public sealed class OutboxTests(TenancyDatabase database)
     }
 
     [Fact]
+    public async Task HandlerWorkBreakingAnotherUniqueConstraint_FailsTheAttempt_NotMistakenForADuplicateReceipt()
+    {
+        // Only a conflict on the receipt's own key means "another dispatcher already did this".
+        // Anything else rolled the handler's work back, so the message must not count as processed.
+        var tenant = await database.CreateTenantAsync();
+        await using var services = CreateServices(withConflictingHandler: true);
+        await CreateWidgetAsync(services, tenant);
+
+        await Processor(services).ProcessTenantAsync(tenant, Ct);
+
+        var failed = Assert.Single(await OutboxRowsAsync(tenant));
+        Assert.Null(failed.ProcessedAt);
+        Assert.Equal(1, failed.AttemptCount);
+        Assert.Contains(nameof(ConflictingWriteHandler), failed.LastError, StringComparison.Ordinal);
+        Assert.Equal(0, await ReceiptCountAsync(failed.Id, nameof(ConflictingWriteHandler)));
+    }
+
+    [Fact]
+    public async Task DispatcherLogs_BetweenTenantScopes_CarryTheTenant()
+    {
+        // The retry log is written after the scope that recorded the failure has ended.
+        var logs = new List<LogRecord>();
+        var tenant = await database.CreateTenantAsync();
+        _log.FailuresBeforeSuccess = 1;
+        await using var services = CreateServices(withFlakyHandler: true, logs: logs);
+        await CreateWidgetAsync(services, tenant);
+
+        await Processor(services).ProcessTenantAsync(tenant, Ct);
+
+        var retry = Assert.Single(logs, record => record.Body?.Contains("will retry", StringComparison.Ordinal) == true);
+        Assert.Contains(retry.Attributes!, attribute =>
+            attribute.Key == TenantTelemetry.TenantIdAttribute && Equals(attribute.Value, tenant.ToString()));
+    }
+
+    [Fact]
     public async Task RepeatedFailures_ParkTheMessage()
     {
         var tenant = await database.CreateTenantAsync();
@@ -201,6 +239,7 @@ public sealed class OutboxTests(TenancyDatabase database)
         var parked = Assert.Single(await OutboxRowsAsync(tenant));
         Assert.NotNull(parked.FailedAt);
         Assert.Equal(1, parked.AttemptCount);
+        Assert.Contains("Unknown event type", parked.LastError, StringComparison.Ordinal);
         Assert.Empty(_log.Calls);
     }
 
@@ -454,9 +493,25 @@ public sealed class OutboxTests(TenancyDatabase database)
         int maxAttempts = 10,
         int batchSize = 20,
         Gate? gate = null,
-        TimeSpan? leaseDuration = null) =>
+        TimeSpan? leaseDuration = null,
+        bool withConflictingHandler = false,
+        List<LogRecord>? logs = null) =>
         database.CreateServices(configure: services =>
         {
+            if (logs is not null)
+            {
+                services.AddLogging(logging => logging.AddOpenTelemetry(options =>
+                {
+                    options.AddProcessor(new TenantLogProcessor());
+                    options.AddInMemoryExporter(logs);
+                }));
+            }
+
+            if (withConflictingHandler)
+            {
+                services.AddDomainEventHandler<WidgetRenamed, ConflictingWriteHandler>();
+            }
+
             services.AddSingleton(_log);
             services.AddSingleton<TimeProvider>(_time);
             services.AddDbContext<WidgetDbContext>((sp, options) => options.UseNpgsql(sp.GetRequiredService<NpgsqlDataSource>()));
