@@ -137,8 +137,15 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
 - Payments go through `IPaymentGateway` and each organizer's own merchant account. **Fulfil
   (issue tickets) only after `GetStatusAsync` reports `Succeeded` with the expected amount.** Never
   on the buyer's return URL, never on a webhook's contents: a webhook only triggers a status check.
-- `PaymentId` and `RefundId` are idempotency keys; `PaymentProviderUnavailableException` means
-  "unknown", never "not paid".
+- **Fulfil at most once per `PaymentId`.** `Succeeded` is final: it stays `Succeeded` after a refund
+  or dispute, so a retry or reconciliation that sees it again must not issue tickets again. What has
+  been refunded is the platform's own record, built from `RefundAsync` results.
+- `PaymentId` and `RefundId` are idempotency keys. Reusing one with different details throws
+  `PaymentIdempotencyConflictException`. A retry after `Failed` is a new payment with a new
+  `PaymentId`. `PaymentProviderUnavailableException` means "unknown", never "not paid";
+  `PaymentRequestRejectedException` means a definite "no".
+- `Money` and `TenantId` serialize through their own JSON converters, which validate on read. Any
+  new value type that goes into an event needs the same, plus a round-trip test.
 - Every real adapter derives from `tests/Kernel.Tests/Payments/PaymentGatewayContractTests` and must
   pass it against the provider's sandbox. `FakePaymentGateway` is for tests only.
 

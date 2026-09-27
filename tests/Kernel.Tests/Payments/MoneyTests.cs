@@ -1,9 +1,12 @@
+using System.Text.Json;
 using Platform.Kernel.Contracts.Payments;
 
 namespace Platform.Kernel.Tests.Payments;
 
 public sealed class MoneyTests
 {
+    private static readonly JsonSerializerOptions _web = new(JsonSerializerDefaults.Web);
+
     [Theory]
     [InlineData("GEL")]
     [InlineData("EUR")]
@@ -55,6 +58,61 @@ public sealed class MoneyTests
     public void Arithmetic_Overflow_Throws()
     {
         Assert.Throws<OverflowException>(() => Money.Of(long.MaxValue, "GEL") + Money.Of(1, "GEL"));
+    }
+
+    [Fact]
+    public void Json_RoundTrips()
+    {
+        var money = Money.Of(2500, "GEL");
+
+        var json = JsonSerializer.Serialize(money, _web);
+
+        Assert.Equal("""{"amountMinor":2500,"currency":"GEL"}""", json);
+        Assert.Equal(money, JsonSerializer.Deserialize<Money>(json, _web));
+        Assert.Equal(money, JsonSerializer.Deserialize<Money>(json));
+    }
+
+    [Theory]
+    [InlineData("""{"amountMinor":2500,"currency":"gel"}""")]
+    [InlineData("""{"amountMinor":2500}""")]
+    [InlineData("""{"currency":"GEL"}""")]
+    [InlineData("""{"amountMinor":"2500","currency":"GEL"}""")]
+    [InlineData("""{"amountMinor":25.5,"currency":"GEL"}""")]
+    [InlineData("""{"amountMinor":2500,"currency":null}""")]
+    [InlineData("""{}""")]
+    [InlineData("""2500""")]
+    [InlineData("""{"amountMinor":2500,"currency":"GEL","amountMinor":1}""")]
+    [InlineData("""{"amountMinor":2500,"currency":"GEL","Currency":"EUR"}""")]
+    public void Json_Invalid_ThrowsJsonException(string json)
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<Money>(json, _web));
+    }
+
+    [Theory]
+    [InlineData("""{"amountMinor":2500,"meta":{"amountMinor":999,"currency":"EUR"},"currency":"GEL"}""")]
+    [InlineData("""{"note":"x","amountMinor":2500,"tags":[{"amountMinor":1}],"currency":"GEL","n":7}""")]
+    public void Json_UnknownProperties_AreSkipped_EvenNestedOnesThatLookLikeMoney(string json)
+    {
+        Assert.Equal(Money.Of(2500, "GEL"), JsonSerializer.Deserialize<Money>(json, _web));
+    }
+
+    [Fact]
+    public async Task Json_FromAStreamInSmallChunks_SkipsUnknownProperties()
+    {
+        // A stream is read in small buffers, as ASP.NET Core reads request bodies; the unknown nested
+        // property spans several of them.
+        var json = """{"amountMinor":2500,"meta":{"deeply":{"nested":[1,2,3,4,5,6,7,8,9]}},"currency":"GEL"}"""u8.ToArray();
+        await using var stream = new MemoryStream(json);
+
+        var money = await JsonSerializer.DeserializeAsync<Money>(stream, new JsonSerializerOptions(_web) { DefaultBufferSize = 16 }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Money.Of(2500, "GEL"), money);
+    }
+
+    [Fact]
+    public void Json_DefaultMoney_CannotBeWritten()
+    {
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(default(Money), _web));
     }
 
     [Fact]

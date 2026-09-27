@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Platform.Kernel.Contracts.Payments;
 
 /// <summary>
@@ -10,7 +12,9 @@ namespace Platform.Kernel.Contracts.Payments;
 /// conversion to or from <see cref="decimal"/> here, because that needs the currency's minor-unit
 /// exponent (2 for GEL and EUR, 0 for JPY, 3 for KWD), which is presentation, not arithmetic.
 /// <c>default(Money)</c> has no currency and is invalid; create values with <see cref="Of"/>.
+/// JSON goes through <see cref="MoneyJsonConverter"/>, which validates on the way in.
 /// </remarks>
+[JsonConverter(typeof(MoneyJsonConverter))]
 public readonly record struct Money
 {
     private Money(long amountMinor, string currency)

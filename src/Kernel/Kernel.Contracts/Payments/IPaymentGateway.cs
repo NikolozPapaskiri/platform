@@ -13,12 +13,28 @@ namespace Platform.Kernel.Contracts.Payments;
 /// <see cref="PaymentStatus.Succeeded"/> <i>and</i> its <see cref="PaymentStatusResult.Amount"/>
 /// equals the amount the order expected. Never issue on the buyer's return to the success URL (anyone
 /// can open it) or on a webhook's contents (webhooks are hints, see <see cref="ParseWebhookAsync"/>).</para>
+/// <para><b>Fulfil once per payment.</b> <see cref="PaymentStatus.Succeeded"/> is final: it means
+/// "was paid", and a later refund or dispute does not change it. Some providers report refunds on the
+/// payment itself (a "refunded" capture status); adapters still map a once-paid payment to Succeeded.
+/// So fulfilment must be idempotent per <see cref="PaymentSessionRequest.PaymentId"/>:
+/// seeing Succeeded again, on a retry or a reconciliation run, never issues tickets again. What has
+/// been refunded is the platform's own record, built from <see cref="RefundAsync"/> results.</para>
 /// <para><b>Idempotency.</b> <see cref="PaymentSessionRequest.PaymentId"/> and
 /// <see cref="RefundRequest.RefundId"/> are idempotency keys: repeating a call with the same key
-/// (after a timeout, say) must not create a second session or a second refund.</para>
-/// <para><b>Failures.</b> A definitive answer from the provider is a status. Not getting an answer
-/// (network error, timeout, provider outage) throws <see cref="PaymentProviderUnavailableException"/>:
-/// "unknown" must never be mistaken for "not paid".</para>
+/// (after a timeout, say) must not create a second session or a second refund. Repeating a key with
+/// different details (another amount, another payment to refund) is a bug in the caller and throws
+/// <see cref="PaymentIdempotencyConflictException"/>; it never silently returns the first result.
+/// Providers keep keys for a limited time (Stripe: at least 24 hours), and some have no idempotency
+/// keys at all: such an adapter stores key-to-session itself. A retry that reaches the provider while
+/// the first call with that key is still running (Stripe answers 409) is
+/// <see cref="PaymentProviderUnavailableException"/>: the outcome is not known yet.</para>
+/// <para><b>Amounts</b> must be positive, in a valid currency. Anything else (zero, negative,
+/// <c>default(Money)</c>) throws <see cref="ArgumentException"/> before the provider is called.</para>
+/// <para><b>Failures.</b> A definitive answer from the provider is a status, or
+/// <see cref="PaymentRequestRejectedException"/> where there is no status to report (a session the
+/// provider refuses to create). Not getting an answer (network error, timeout, provider outage)
+/// throws <see cref="PaymentProviderUnavailableException"/>: "unknown" must never be mistaken for
+/// "not paid".</para>
 /// </remarks>
 public interface IPaymentGateway
 {
@@ -27,6 +43,10 @@ public interface IPaymentGateway
     /// <see cref="PaymentSession.RedirectUrl"/>; keep <see cref="PaymentSession.ProviderSessionId"/>
     /// to check the status later.
     /// </summary>
+    /// <exception cref="PaymentRequestRejectedException">
+    /// The provider definitively refuses the session, for example an amount below its minimum or a
+    /// currency the merchant account does not accept. Retrying the same request will not help.
+    /// </exception>
     Task<PaymentSession> CreateSessionAsync(PaymentSessionRequest request, CancellationToken cancellationToken);
 
     /// <summary>
@@ -39,6 +59,12 @@ public interface IPaymentGateway
     Task<PaymentStatusResult> GetStatusAsync(TenantId tenant, string providerSessionId, CancellationToken cancellationToken);
 
     /// <summary>Refunds all or part of a completed payment.</summary>
+    /// <remarks>
+    /// A refund the adapter or the provider rejects is <see cref="RefundStatus.Failed"/>: more than is
+    /// left to refund, a different currency (some providers take no currency on a refund, so the
+    /// adapter checks it against the payment), or a payment the tenant's merchant account does not
+    /// have (including another tenant's payment).
+    /// </remarks>
     Task<RefundResult> RefundAsync(RefundRequest request, CancellationToken cancellationToken);
 
     /// <summary>
@@ -48,8 +74,16 @@ public interface IPaymentGateway
     /// A webhook is a hint to check the payment, never proof of payment: respond by calling
     /// <see cref="GetStatusAsync"/>. Providers retry and duplicate webhooks, so handling must be
     /// idempotent; <see cref="PaymentWebhook.EventId"/> identifies a delivery for deduplication.
+    /// Adapters also enforce the provider's replay protection (typically a signed timestamp with a
+    /// tolerance of a few minutes). Where one secret signs events for many merchant accounts (a
+    /// platform-level endpoint), the adapter also rejects an event that belongs to another account.
+    /// A verified event that is not about a payment session has no
+    /// <see cref="PaymentWebhook.ProviderSessionId"/>: acknowledge it and do nothing, or the provider
+    /// keeps retrying it.
     /// </remarks>
-    /// <exception cref="PaymentWebhookRejectedException">Missing or invalid signature, or unreadable body.</exception>
+    /// <exception cref="PaymentWebhookRejectedException">
+    /// Missing or invalid signature, signed for or belonging to another tenant, too old, or unreadable.
+    /// </exception>
     Task<PaymentWebhook> ParseWebhookAsync(TenantId tenant, PaymentWebhookRequest request, CancellationToken cancellationToken);
 }
 
@@ -77,13 +111,22 @@ public enum PaymentStatus
     /// <summary>Not finished: the buyer has not paid yet, or the provider is still processing.</summary>
     Pending = 1,
 
-    /// <summary>Paid. Check the amount before fulfilling.</summary>
+    /// <summary>
+    /// Paid. Final: it stays Succeeded after a refund or dispute. Check the amount before fulfilling,
+    /// and fulfil once per payment.
+    /// </summary>
     Succeeded = 2,
 
-    /// <summary>The payment was attempted and declined or errored. The buyer may try again.</summary>
+    /// <summary>
+    /// The payment was attempted and declined or errored. The buyer may try again, as a new payment
+    /// with a new <see cref="PaymentSessionRequest.PaymentId"/>.
+    /// </summary>
     Failed = 3,
 
-    /// <summary>The buyer abandoned or cancelled the payment page.</summary>
+    /// <summary>
+    /// The provider knows the buyer abandoned the payment. Some providers never report this (the
+    /// return to the cancel URL proves nothing, and the session stays open until it expires).
+    /// </summary>
     Cancelled = 4,
 
     /// <summary>The session expired without payment.</summary>
@@ -122,8 +165,11 @@ public sealed record RefundResult(RefundStatus Status, string? ProviderRefundId)
 public sealed record PaymentWebhookRequest(IReadOnlyDictionary<string, string> Headers, ReadOnlyMemory<byte> Body);
 
 /// <param name="EventId">Identifies this delivery, for deduplicating retried webhooks.</param>
-/// <param name="ProviderSessionId">The session to check with <c>GetStatusAsync</c>.</param>
-public sealed record PaymentWebhook(string EventId, string ProviderSessionId);
+/// <param name="ProviderSessionId">
+/// The session to check with <c>GetStatusAsync</c>; null when the event is not about a payment
+/// session (acknowledge it and ignore it).
+/// </param>
+public sealed record PaymentWebhook(string EventId, string? ProviderSessionId);
 
 /// <summary>The provider could not be reached or gave no usable answer. The outcome is unknown: retry later.</summary>
 public sealed class PaymentProviderUnavailableException : Exception
@@ -138,6 +184,48 @@ public sealed class PaymentProviderUnavailableException : Exception
     }
 
     public PaymentProviderUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// An idempotency key (<see cref="PaymentSessionRequest.PaymentId"/> or
+/// <see cref="RefundRequest.RefundId"/>) was reused with different details. A caller bug: do not retry.
+/// </summary>
+public sealed class PaymentIdempotencyConflictException : Exception
+{
+    public PaymentIdempotencyConflictException()
+    {
+    }
+
+    public PaymentIdempotencyConflictException(string message)
+        : base(message)
+    {
+    }
+
+    public PaymentIdempotencyConflictException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}
+
+/// <summary>
+/// The provider definitively refused the request. Unlike <see cref="PaymentProviderUnavailableException"/>,
+/// the outcome is known: retrying the same request will not help.
+/// </summary>
+public sealed class PaymentRequestRejectedException : Exception
+{
+    public PaymentRequestRejectedException()
+    {
+    }
+
+    public PaymentRequestRejectedException(string message)
+        : base(message)
+    {
+    }
+
+    public PaymentRequestRejectedException(string message, Exception innerException)
         : base(message, innerException)
     {
     }
