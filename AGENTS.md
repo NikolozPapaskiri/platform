@@ -127,9 +127,9 @@ Decided in `docs/adr/0003-tenant-isolation-ef-plus-rls.md`. The short version:
   Kernel's `PlatformDbContext` work commits atomically with the receipt today. **Treat every handler
   effect as possibly repeated and key it on `context.MessageId`** until the M1 ADR decides how pack
   contexts share that transaction.
-- **Open M1 decision (ADR required before M1 code):** packs cannot reference the Kernel, so they
-  cannot derive from `TenantAwareDbContext`. Options include packs contributing entity configuration
-  to one Kernel-owned context, or a persistence abstractions assembly packs may reference.
+- **Open M1 decision, blocking all M1 code:** `docs/adr/0005-pack-persistence.md` (status
+  **Proposed**) decides how packs persist data and share the receipt's transaction. Until Nika
+  accepts it, do not add pack entities, pack DbContexts, or pack migrations; ask him to decide.
 - Events are records of ids and values (JSON), never entities.
 
 ### Money and payments (ADR 0004)
