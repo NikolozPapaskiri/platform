@@ -8,6 +8,9 @@ explicitly ask for code.
 
 Why this design exists: `docs/adr/0003-tenant-isolation-ef-plus-rls.md`.
 
+**The ordered walkthrough** (every step, with the APIs, the checks, and the design choice in B
+explained): [`m0-tenancy-steps.md`](m0-tenancy-steps.md).
+
 ## 1. What you build
 
 | # | Piece | File | Status today |
