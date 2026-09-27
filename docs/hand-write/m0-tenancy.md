@@ -8,6 +8,9 @@ explicitly ask for code.
 
 Why this design exists: `docs/adr/0003-tenant-isolation-ef-plus-rls.md`.
 
+**The ordered walkthrough** (every step, with the APIs, the checks, and the design choice in B
+explained): [`m0-tenancy-steps.md`](m0-tenancy-steps.md).
+
 ## 1. What you build
 
 | # | Piece | File | Status today |
@@ -42,7 +45,8 @@ can use it:
   (`src/Kernel/Kernel/KernelServiceCollectionExtensions.cs`).
 
 Choosing which EF Core interceptor interface(s) to implement, and whether the tenant is set per
-connection or per transaction, is part of the exercise.
+connection or per transaction, is part of the exercise. The three options, their tradeoffs, and a
+recommendation (behind a "try first" fold) are in step B1 of the walkthrough.
 
 ### C. Row-level security migration
 

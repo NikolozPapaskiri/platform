@@ -286,7 +286,12 @@ public sealed class TenancyContractTests(TenancyDatabase database)
         await app.StartAsync(Ct);
 
         using var client = app.GetTestClient();
-        using var response = await client.GetAsync(new Uri($"http://{host}/"), Ct);
+
+        // The Host header is set explicitly: System.Uri lower-cases the host of an http URI, so a
+        // mixed-case host passed only in the URI would reach the middleware already lower-cased.
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"http://{host}/"));
+        request.Headers.Host = host;
+        using var response = await client.SendAsync(request, Ct);
         return (response.StatusCode, await response.Content.ReadAsStringAsync(Ct));
     }
 
